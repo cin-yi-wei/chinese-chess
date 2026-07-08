@@ -1,7 +1,8 @@
 name: build-desktop
 
-# 打 tag（v*）或手動觸發 → Windows + macOS 各自用 PyInstaller 打包 → 掛到 GitHub Release。
-# 權重不打包，執行檔首次啟動從 Release 的 latest.pt 附件自動下載。
+# 打 tag（v*）或手動觸發 → Windows + macOS 各自用 PyInstaller 打包成 artifact，
+# 最後由單一 release job 一次上傳到 GitHub Release（避免兩個 job 併發寫同一 release 撞車）。
+# 權重不打包，執行檔首次啟動從 Release 的 weights 附件自動下載。
 on:
   push:
     tags: ["v*"]
@@ -68,15 +69,22 @@ jobs:
         run: |
           if [ -d "XiangqiAZ.app" ]; then zip -r "XiangqiAZ-macos.zip" "XiangqiAZ.app"; else zip -r "XiangqiAZ-macos.zip" "XiangqiAZ"; fi
 
-      - name: Upload to Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: desktop/dist/XiangqiAZ-${{ matrix.name }}.zip
-
-      - name: Upload artifact (non-tag runs)
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: XiangqiAZ-${{ matrix.name }}
           path: desktop/dist/XiangqiAZ-${{ matrix.name }}.zip
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Publish to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*.zip
