@@ -36,7 +36,7 @@ os.environ.setdefault("CHESS_STATIC", _STATIC)
 # 權重下載來源（GitHub Release 的 latest.pt 附件；換強腦只要重傳附件）
 os.environ.setdefault(
     "CHESS_WEIGHTS_URL",
-    "https://github.com/cin-yi-wei/chinese-chess/releases/latest/download/latest.pt",
+    "https://github.com/cin-yi-wei/chinese-chess/releases/download/weights/latest.pt",
 )
 
 
