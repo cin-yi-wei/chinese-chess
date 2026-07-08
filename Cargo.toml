@@ -1,0 +1,11 @@
+# Workspace 根：象棋專案 Rust 後端
+# engine = 純棋引擎函式庫（零 I/O，好測試、將來可編 WASM）
+# server = axum WebSocket 服務，包裝 engine
+[workspace]
+resolver = "2"
+members = ["engine", "server"]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "MIT"

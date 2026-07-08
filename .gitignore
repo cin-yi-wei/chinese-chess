@@ -1,0 +1,11 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock
+
+# Node / 前端（里程碑 ④ 加入）
+node_modules/
+dist/
+
+# 編輯器
+.DS_Store
