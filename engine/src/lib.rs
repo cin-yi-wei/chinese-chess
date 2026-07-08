@@ -18,7 +18,7 @@ pub mod search;
 
 pub use board::{Board, Move};
 pub use mcts::{best_move_mcts, best_move_mcts_strength};
-pub use search::{best_move, best_move_iterative};
+pub use search::{best_move, best_move_iterative, best_move_leveled};
 
 #[cfg(test)]
 mod tests {
@@ -135,6 +135,18 @@ mod tests {
         let mut bb = Board::start();
         let legal = bb.legal_moves();
         assert!(legal.contains(&mv), "MCTS 回傳的著法應為合法著法");
+    }
+
+    #[test]
+    fn leveled_returns_legal_move_various_levels() {
+        // 分級難度：低/中/高 level 都應回合法著法。
+        let mut b = Board::start();
+        let legal = b.legal_moves();
+        for &lv in &[1u8, 50, 100] {
+            let mut bb = Board::start();
+            let mv = best_move_leveled(&mut bb, lv).expect("應搜得著法");
+            assert!(legal.contains(&mv), "level={lv} 回傳的著法應為合法著法");
+        }
     }
 
     #[test]

@@ -16,18 +16,9 @@ use axum::{
     routing::get,
     Router,
 };
-use engine::{best_move, best_move_mcts, best_move_mcts_strength, Board, Move};
+use engine::{best_move, best_move_leveled, Board, Move};
 use serde::{Deserialize, Serialize};
 use tower_http::services::{ServeDir, ServeFile};
-
-/// MCTS 模擬次數（每步，自訂模式用）。吃子導向 rollout 後調高以增強棋力。
-const MCTS_ITERS: u32 = 6000;
-
-/// 自訂難度 1~100 線性映射到 strength index z ∈ [-2, 2]（論文實測此段 z↔Elo 近線性）。
-fn difficulty_to_z(d: u8) -> f64 {
-    let d = d.clamp(1, 100) as f64;
-    -2.0 + (d - 1.0) / 99.0 * 4.0
-}
 
 /// 三種預設模式。
 #[derive(Deserialize, Clone, Copy)]
@@ -51,14 +42,14 @@ fn default_difficulty() -> Difficulty {
 }
 
 impl Difficulty {
-    /// 依難度選出 AI 著法。
-    /// 簡單=alpha-beta 深2、中等=深4、困難=MCTS(robust)、自訂=MCTS 線性棋力系統(z)。
+    /// 依難度選出 AI 著法（全走 alpha-beta，穩定不亂走）。
+    /// 簡單=深2、中等=深4、困難=深5、自訂=1~100 分級（深度+隨機失誤）。
     fn pick(self, board: &mut Board) -> Option<Move> {
         match self {
             Difficulty::Preset(Preset::Easy) => best_move(board, 2),
             Difficulty::Preset(Preset::Medium) => best_move(board, 4),
-            Difficulty::Preset(Preset::Hard) => best_move_mcts(board, 8000),
-            Difficulty::Custom(d) => best_move_mcts_strength(board, MCTS_ITERS, difficulty_to_z(d)),
+            Difficulty::Preset(Preset::Hard) => best_move(board, 5),
+            Difficulty::Custom(d) => best_move_leveled(board, d),
         }
     }
 }
