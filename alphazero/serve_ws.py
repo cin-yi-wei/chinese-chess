@@ -93,14 +93,19 @@ async def index(_request: web.Request) -> web.FileResponse:
     return web.FileResponse(os.path.join(STATIC, "index.html"))
 
 
-def main() -> None:
+def make_app() -> web.Application:
+    """建立 aiohttp app（供 serve_ws 主程式與桌面版 desktop/ 共用）。"""
     app = web.Application()
     app.router.add_get("/ws", ws_handler)
     app.router.add_get("/health", lambda _r: web.Response(text="ok"))
     app.router.add_get("/", index)
     app.router.add_static("/", STATIC, show_index=False)
+    return app
+
+
+def main() -> None:
     print(f"AlphaZero 對弈服務啟動 127.0.0.1:{PORT}  weights={WEIGHTS} sims={SIMS} device={_device}")
-    web.run_app(app, host="127.0.0.1", port=PORT)
+    web.run_app(make_app(), host="127.0.0.1", port=PORT)
 
 
 if __name__ == "__main__":
