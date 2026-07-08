@@ -102,6 +102,69 @@ def puct_search(board: Board, evaluator=material_evaluator, sims: int = 400,
     return max(root.children.items(), key=lambda kv: kv[1].n)[0]
 
 
+def _backprop_vloss(path, leaf_value: float) -> None:
+    """回傳並移除虛擬損失。path[0] 為根（無 vloss），path[1:] 於下探時加過 vloss。"""
+    v = leaf_value
+    for i in range(len(path) - 1, -1, -1):
+        node = path[i]
+        if i > 0:
+            node.n -= 1.0  # 移除 vloss 的虛擬訪問
+            node.w += 1.0  # 移除 vloss 的 -1
+        node.n += 1.0
+        node.w += v
+        v = -v
+
+
+def puct_search_batched(root_board: Board, batch_evaluator, sims: int = 400,
+                        batch_size: int = 32, c_puct: float = 1.5):
+    """批次葉評估的 PUCT：一次收集 batch_size 個葉、打包成一次前向評估。
+
+    用 virtual loss 讓同批的下探路徑岔開，避免全部擠同一條。無合法著法回 None。
+    batch_evaluator 需有 .batch([(board, legal)...]) -> [(priors, value)...]。
+    """
+    root_legal = root_board.clone().legal_moves()
+    if not root_legal:
+        return None
+    root = Node(0.0)
+    priors0, _ = batch_evaluator.batch([(root_board, root_legal)])[0]
+    for mv in root_legal:
+        root.children[mv] = Node(priors0.get(mv, 0.0))
+
+    done = 0
+    while done < sims:
+        n_collect = min(batch_size, sims - done)
+        pending = []    # (path, board, legal) 待評估
+        terminals = []  # (path, value) 終局直接回傳
+        for _ in range(n_collect):
+            b = root_board.clone()
+            node = root
+            path = [root]
+            while node.children:
+                mv, node = _select(node, c_puct)
+                b.make_move(mv)
+                node.n += 1.0   # virtual loss
+                node.w += -1.0
+                path.append(node)
+            legal = b.legal_moves()
+            if not legal:
+                terminals.append((path, -1.0))
+            else:
+                pending.append((path, b, legal))
+
+        if pending:
+            results = batch_evaluator.batch([(b, legal) for _, b, legal in pending])
+            for (path, _b, legal), (priors, value) in zip(pending, results):
+                leaf = path[-1]
+                for mv in legal:
+                    leaf.children[mv] = Node(priors.get(mv, 0.0))
+                _backprop_vloss(path, value)
+        for path, value in terminals:
+            _backprop_vloss(path, value)
+        done += n_collect
+
+    return max(root.children.items(), key=lambda kv: kv[1].n)[0]
+
+
 def visit_distribution(board: Board, evaluator=material_evaluator, sims: int = 400,
                        c_puct: float = 1.5) -> dict[int, int]:
     """回傳根節點各著法的訪問次數（供自我對弈產生訓練用的 policy 目標）。"""
