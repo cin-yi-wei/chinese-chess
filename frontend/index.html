@@ -22,9 +22,15 @@
         letter-spacing: 1px;
         min-height: 24px;
       }
-      #new-game {
+      #controls {
         margin-bottom: 12px;
-        padding: 8px 20px;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+      #controls label { font-size: 14px; opacity: .85; }
+      #difficulty, #new-game {
+        padding: 8px 14px;
         font-size: 15px;
         border: 1px solid #a9784b;
         background: #2b2420;
@@ -32,13 +38,21 @@
         border-radius: 6px;
         cursor: pointer;
       }
-      #new-game:hover { background: #3a302a; }
+      #new-game:hover, #difficulty:hover { background: #3a302a; }
       #game { box-shadow: 0 10px 40px rgba(0,0,0,.5); border-radius: 8px; }
     </style>
   </head>
   <body>
     <div id="status">連線中…</div>
-    <button id="new-game">重新開局</button>
+    <div id="controls">
+      <label for="difficulty">難度</label>
+      <select id="difficulty">
+        <option value="easy">簡單（淺層搜尋）</option>
+        <option value="medium" selected>中等（alpha-beta）</option>
+        <option value="hard">困難（MCTS）</option>
+      </select>
+      <button id="new-game">重新開局</button>
+    </div>
     <div id="game"></div>
     <script type="module" src="/src/main.js"></script>
   </body>

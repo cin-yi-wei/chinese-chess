@@ -34,9 +34,14 @@ class BoardScene extends Phaser.Scene {
     this.markerGfx = this.add.graphics().setDepth(5);
     this.connect();
     this.input.on('pointerdown', (p) => this.onClick(p));
-    document.getElementById('new-game').onclick = () => {
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) this.send({ type: 'new_game' });
-    };
+    document.getElementById('new-game').onclick = () => this.newGame();
+  }
+
+  newGame() {
+    const el = document.getElementById('difficulty');
+    const difficulty = el ? el.value : 'medium';
+    this.busy = false;
+    this.send({ type: 'new_game', difficulty });
   }
 
   // ---- WebSocket ----
@@ -45,7 +50,7 @@ class BoardScene extends Phaser.Scene {
     this.ws = new WebSocket(`${proto}://${location.host}/ws`);
     this.ws.onopen = () => {
       this.setStatus('已連線');
-      this.send({ type: 'new_game' });
+      this.newGame();
     };
     this.ws.onclose = () => this.setStatus('連線中斷，重整頁面再試');
     this.ws.onmessage = (e) => this.onMessage(JSON.parse(e.data));
@@ -83,8 +88,10 @@ class BoardScene extends Phaser.Scene {
 
   updateStatus(msg) {
     if (this.gameOver) {
-      this.setStatus(this.gameOver === 'red' ? '🎉 紅方勝！' : '黑方勝，再接再厲');
-      this.showBanner(this.gameOver === 'red' ? '紅方勝' : '黑方勝');
+      const label =
+        this.gameOver === 'draw' ? '和局' : this.gameOver === 'red' ? '紅方勝' : '黑方勝';
+      this.setStatus(this.gameOver === 'red' ? '🎉 紅方勝！' : this.gameOver === 'draw' ? '和局（三次重複）' : '黑方勝，再接再厲');
+      this.showBanner(label);
     } else if (msg.inCheck) {
       this.setStatus((this.redToMove ? '紅方' : '黑方') + '被將軍！');
       this.flashCheck();

@@ -9,9 +9,53 @@
 //! Zobrist 重複判定留待里程碑 ③。
 
 use crate::piece_value::PIECE_VALUE;
+use std::sync::OnceLock;
 
 /// 走法：低 8 位為起點格、高 8 位為終點格。
 pub type Move = u16;
+
+/// Zobrist 雜湊：14 種棋子（紅 0..6、黑 7..13）× 256 格的隨機鍵。
+/// 全域共用一份（用 OnceLock 惰性產生），Board 只存當前 64 位雜湊值，
+/// 避免每次 clone 都複製整張表（MCTS 會大量 clone）。
+fn zobrist_table() -> &'static [[u64; 256]; 14] {
+    static TABLE: OnceLock<[[u64; 256]; 14]> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        // splitmix64 產生確定性隨機鍵。
+        let mut seed: u64 = 0x1234_5678_9abc_def0;
+        let mut next = || {
+            seed = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut z = seed;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            z ^ (z >> 31)
+        };
+        let mut t = [[0u64; 256]; 14];
+        for row in t.iter_mut() {
+            for cell in row.iter_mut() {
+                *cell = next();
+            }
+        }
+        t
+    })
+}
+
+/// 走子方為黑時額外 XOR 的鍵。
+const ZOBRIST_SIDE: u64 = 0xf0e1_d2c3_b4a5_9687;
+
+/// 棋子編碼（8..=22）轉 Zobrist 表列索引（0..=13）。
+#[inline]
+fn zob_index(pc: u8) -> usize {
+    if pc < BLACK_TAG {
+        (pc - RED_TAG) as usize // 紅 0..6
+    } else {
+        7 + (pc - BLACK_TAG) as usize // 黑 7..13
+    }
+}
+
+#[inline]
+fn zob_key(pc: u8, sq: usize) -> u64 {
+    zobrist_table()[zob_index(pc)][sq]
+}
 
 // ---- 棋子種類（與紅黑標記相加得到棋子編碼）----
 const PIECE_KING: u8 = 0; // 將／帥
@@ -106,10 +150,16 @@ pub struct Board {
     pub red_to_move: bool,
     /// 目前搜尋深度（步數）。
     pub distance: u16,
+    /// 目前局面的 Zobrist 雜湊（含走子方）。
+    pub zobrist: u64,
     /// 走法堆疊，供 undo。
     move_stack: Vec<Move>,
     /// 被吃子堆疊，與 move_stack 對齊；無吃子存 0。
     capture_stack: Vec<u8>,
+    /// move_piece 前的 zobrist 快照堆疊，供 undo 還原。
+    zob_stack: Vec<u64>,
+    /// 每步（成功 make_move 後）的 zobrist 歷史，供重複盤面判定。
+    key_history: Vec<u64>,
 }
 
 impl Board {
@@ -119,8 +169,11 @@ impl Board {
             squares: [0u8; 256],
             red_to_move: true,
             distance: 0,
+            zobrist: 0,
             move_stack: Vec::new(),
             capture_stack: Vec::new(),
+            zob_stack: Vec::new(),
+            key_history: Vec::new(),
         }
     }
 
@@ -170,6 +223,8 @@ impl Board {
         self.distance = 0;
         self.move_stack.clear();
         self.capture_stack.clear();
+        self.zob_stack.clear();
+        self.key_history.clear();
 
         const RANK_TOP: i32 = 3;
         const RANK_BOTTOM: i32 = 12;
@@ -198,22 +253,47 @@ impl Board {
                 }
             }
         }
+        self.recompute_zobrist();
+        // 初始盤面本身算一次出現，納入歷史以正確判定重複。
+        self.key_history.push(self.zobrist);
     }
 
-    /// 切換走子方。
+    /// 由目前盤面與走子方重算 Zobrist 雜湊。
+    fn recompute_zobrist(&mut self) {
+        let mut z = 0u64;
+        for (sq, &pc) in self.squares.iter().enumerate() {
+            if pc != 0 {
+                z ^= zob_key(pc, sq);
+            }
+        }
+        if !self.red_to_move {
+            z ^= ZOBRIST_SIDE;
+        }
+        self.zobrist = z;
+    }
+
+    /// 切換走子方（同時翻轉 zobrist 的走子方位）。
     #[inline]
     fn change_side(&mut self) {
         self.red_to_move = !self.red_to_move;
+        self.zobrist ^= ZOBRIST_SIDE;
     }
 
     /// 移動棋子（不切邊、不做合法性檢查），並記錄以供 undo。
     fn move_piece(&mut self, mv: Move) {
         let s = src(mv) as usize;
         let d = dst(mv) as usize;
+        self.zob_stack.push(self.zobrist);
         let captured = self.squares[d];
         self.capture_stack.push(captured);
-        self.squares[d] = self.squares[s];
+        if captured != 0 {
+            self.zobrist ^= zob_key(captured, d);
+        }
+        let moved = self.squares[s];
+        self.zobrist ^= zob_key(moved, s); // 從起點移除
+        self.squares[d] = moved;
         self.squares[s] = 0;
+        self.zobrist ^= zob_key(moved, d); // 放到終點
         self.move_stack.push(mv);
     }
 
@@ -224,6 +304,7 @@ impl Board {
         let d = dst(mv) as usize;
         self.squares[s] = self.squares[d];
         self.squares[d] = self.capture_stack.pop().expect("capture_stack 為空");
+        self.zobrist = self.zob_stack.pop().expect("zob_stack 為空");
     }
 
     /// 嘗試走一步。若走完後本方被將軍（送死）則撤銷並回傳 false。
@@ -235,14 +316,35 @@ impl Board {
         }
         self.change_side();
         self.distance += 1;
+        self.key_history.push(self.zobrist);
         true
     }
 
     /// 撤銷 make_move。
     pub fn undo_make_move(&mut self) {
+        self.key_history.pop();
         self.distance -= 1;
         self.change_side();
         self.undo_move_piece();
+    }
+
+    /// 目前局面在本局歷史中重複出現的次數（不含當前這次）。
+    pub fn repetition_count(&self) -> usize {
+        self.key_history
+            .iter()
+            .filter(|&&k| k == self.zobrist)
+            .count()
+            .saturating_sub(1)
+    }
+
+    /// 目前局面是否為重複盤面（先前至少出現過一次）。
+    pub fn is_repetition(&self) -> bool {
+        self.repetition_count() >= 1
+    }
+
+    /// 是否達三次重複（可判和）。
+    pub fn is_threefold(&self) -> bool {
+        self.repetition_count() >= 2
     }
 
     /// 本方（目前走子方）的將是否正被將軍。

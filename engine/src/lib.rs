@@ -92,6 +92,42 @@ mod tests {
     }
 
     #[test]
+    fn zobrist_restored_after_undo() {
+        let mut b = Board::start();
+        let z0 = b.zobrist;
+        let mv = *b.legal_moves().first().unwrap();
+        assert!(b.make_move(mv));
+        assert_ne!(b.zobrist, z0, "走一步後雜湊應改變");
+        b.undo_make_move();
+        assert_eq!(b.zobrist, z0, "undo 後雜湊應還原");
+    }
+
+    #[test]
+    fn detects_repetition_and_threefold() {
+        let sq = Board::coord_to_sq;
+        let mk = board::make_move_code;
+        let mut b = Board::start();
+        // 紅馬 (1,9)->(2,7)、黑馬 (1,0)->(2,2)、各自走回，四步構成一個還原循環
+        let cycle = [
+            mk(sq(1, 9), sq(2, 7)),
+            mk(sq(1, 0), sq(2, 2)),
+            mk(sq(2, 7), sq(1, 9)),
+            mk(sq(2, 2), sq(1, 0)),
+        ];
+        for &m in &cycle {
+            assert!(b.make_move(m), "循環著法應合法");
+        }
+        assert!(b.is_repetition(), "跑完一圈後應偵測到重複盤面");
+        // 再跑兩圈 → 三次重複
+        for _ in 0..2 {
+            for &m in &cycle {
+                assert!(b.make_move(m));
+            }
+        }
+        assert!(b.is_threefold(), "跑完三圈應達三次重複");
+    }
+
+    #[test]
     fn mcts_returns_legal_move_from_start() {
         // MCTS 應從開局回傳一個合法著法（少量迭代即可驗證流程）。
         let b = Board::start();

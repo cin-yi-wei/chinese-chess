@@ -16,12 +16,9 @@ use axum::{
     routing::get,
     Router,
 };
-use engine::{best_move, Board, Move};
+use engine::{best_move, best_move_mcts, Board, Move};
 use serde::{Deserialize, Serialize};
 use tower_http::services::{ServeDir, ServeFile};
-
-/// AI 搜尋深度（難度）。之後可由 new_game 參數帶入。
-const AI_DEPTH: u8 = 4;
 
 #[tokio::main]
 async fn main() {
@@ -54,8 +51,32 @@ async fn ws_handler(ws: WebSocketUpgrade) -> impl IntoResponse {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ClientMsg {
-    NewGame,
+    NewGame {
+        #[serde(default)]
+        difficulty: Difficulty,
+    },
     Move { from: [u8; 2], to: [u8; 2] },
+}
+
+/// AI 難度：簡單=alpha-beta 淺、中等=alpha-beta 深、困難=MCTS。
+#[derive(Deserialize, Clone, Copy, Default)]
+#[serde(rename_all = "snake_case")]
+enum Difficulty {
+    Easy,
+    #[default]
+    Medium,
+    Hard,
+}
+
+impl Difficulty {
+    /// 依難度選出 AI 著法。
+    fn pick(self, board: &mut Board) -> Option<Move> {
+        match self {
+            Difficulty::Easy => best_move(board, 2),
+            Difficulty::Medium => best_move(board, 4),
+            Difficulty::Hard => best_move_mcts(board, 6000),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -79,6 +100,7 @@ enum ServerMsg {
 /// 每條連線各自持有一局盤面。
 async fn handle_socket(mut socket: WebSocket) {
     let mut board = Board::start();
+    let mut difficulty = Difficulty::default();
 
     while let Some(Ok(msg)) = socket.recv().await {
         let Message::Text(text) = msg else {
@@ -89,12 +111,13 @@ async fn handle_socket(mut socket: WebSocket) {
         };
 
         let reply = match cmd {
-            ClientMsg::NewGame => {
+            ClientMsg::NewGame { difficulty: d } => {
+                difficulty = d;
                 board = Board::start();
                 state_msg(&mut board, None)
             }
             ClientMsg::Move { from, to } => {
-                match apply_human_then_ai(&mut board, from, to) {
+                match apply_human_then_ai(&mut board, from, to, difficulty) {
                     Some(ai) => state_msg(&mut board, ai),
                     None => ServerMsg::Illegal,
                 }
@@ -110,7 +133,12 @@ async fn handle_socket(mut socket: WebSocket) {
 
 /// 套用人類著法；若合法且遊戲續行則讓 AI 回一手。
 /// 回傳 Some(ai_move option)；著法非法回傳 None。
-fn apply_human_then_ai(board: &mut Board, from: [u8; 2], to: [u8; 2]) -> Option<Option<[u8; 4]>> {
+fn apply_human_then_ai(
+    board: &mut Board,
+    from: [u8; 2],
+    to: [u8; 2],
+    difficulty: Difficulty,
+) -> Option<Option<[u8; 4]>> {
     let mv = engine::Board::coord_to_sq(from[0], from[1]) as Move
         | ((engine::Board::coord_to_sq(to[0], to[1]) as Move) << 8);
 
@@ -125,8 +153,8 @@ fn apply_human_then_ai(board: &mut Board, from: [u8; 2], to: [u8; 2]) -> Option<
         return Some(None);
     }
 
-    // AI 回手
-    let ai_mv = best_move(board, AI_DEPTH)?;
+    // AI 回手（依難度）
+    let ai_mv = difficulty.pick(board)?;
     board.make_move(ai_mv);
     Some(Some(move_to_coords(ai_mv)))
 }
@@ -139,6 +167,9 @@ fn state_msg(board: &mut Board, ai_move: Option<[u8; 4]>) -> ServerMsg {
     let game_over = if legal_mvs.is_empty() {
         // 目前走子方無著法 = 被將死，對方勝
         Some(if board.red_to_move { "black" } else { "red" }.to_string())
+    } else if board.is_threefold() {
+        // 三次重複盤面判和
+        Some("draw".to_string())
     } else {
         None
     };
