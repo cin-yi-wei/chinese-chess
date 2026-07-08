@@ -319,9 +319,14 @@ class BoardScene extends Phaser.Scene {
 
 new Phaser.Game({
   type: Phaser.AUTO,
-  width: W,
-  height: H,
   parent: 'game',
   backgroundColor: '#1e1a17',
   scene: BoardScene,
+  // RWD：以固定邏輯尺寸為基準，等比縮放塞進容器（手機直/橫都不跑版）。
+  scale: {
+    mode: Phaser.Scale.FIT,
+    autoCenter: Phaser.Scale.CENTER_BOTH,
+    width: W,
+    height: H,
+  },
 });

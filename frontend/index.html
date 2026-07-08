@@ -2,31 +2,39 @@
 <html lang="zh-Hant">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>中國象棋</title>
     <style>
+      * { box-sizing: border-box; }
       html, body {
         margin: 0;
-        height: 100%;
+        min-height: 100%;
         background: #1e1a17;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
         font-family: "Noto Sans TC", "Microsoft JhengHei", sans-serif;
         color: #e8ded0;
       }
+      body {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-start;
+        gap: 8px;
+        padding: 10px 8px calc(10px + env(safe-area-inset-bottom));
+        min-height: 100dvh;
+      }
       #status {
-        margin: 12px;
-        font-size: 18px;
+        margin: 4px 0;
+        font-size: clamp(15px, 4vw, 18px);
         letter-spacing: 1px;
-        min-height: 24px;
+        min-height: 22px;
+        text-align: center;
       }
       #controls {
-        margin-bottom: 12px;
         display: flex;
         gap: 10px;
         align-items: center;
+        flex-wrap: wrap;
+        justify-content: center;
       }
       #controls label { font-size: 14px; opacity: .85; }
       #difficulty, #new-game {
@@ -39,7 +47,15 @@
         cursor: pointer;
       }
       #new-game:hover, #difficulty:hover { background: #3a302a; }
-      #game { box-shadow: 0 10px 40px rgba(0,0,0,.5); border-radius: 8px; }
+      /* RWD：棋盤等比縮放，同時受寬與高限制，直/橫都不跑版 */
+      #game {
+        width: min(96vw, calc((100dvh - 120px) * 604 / 668), 604px);
+        aspect-ratio: 604 / 668;
+        box-shadow: 0 10px 40px rgba(0,0,0,.5);
+        border-radius: 8px;
+        touch-action: manipulation;
+      }
+      #game canvas { width: 100% !important; height: 100% !important; display: block; }
     </style>
   </head>
   <body>
