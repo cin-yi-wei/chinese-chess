@@ -217,17 +217,44 @@ pub fn best_move_mcts_strength(root_board: &Board, iterations: u32, z: f64) -> O
     pool.last().map(|&(mv, _)| mv)
 }
 
-/// 隨機對局到深度上限，回傳以紅方視角的勝負。
+/// 模擬對局中選吃子步的機率（其餘走隨機合法步）。
+const CAPTURE_BIAS: f64 = 0.8;
+
+/// 對局模擬到深度上限，回傳以紅方視角的勝負。
+///
+/// 用「吃子導向」rollout 取代純隨機：象棋是吃子驅動的，模擬時大機率優先
+/// 走吃子步，統計比亂走準得多，整體棋力明顯提升（方案 1）。
 fn rollout(board: &mut Board, rng: &mut Rng) -> i32 {
     for _ in 0..ROLLOUT_DEPTH {
         let moves = board.legal_moves();
         if moves.is_empty() {
             return if board.red_to_move { -1 } else { 1 };
         }
-        let mv = moves[rng.below(moves.len())];
+        let mv = pick_rollout_move(board, &moves, rng);
         board.make_move(mv);
+        // 提早結束：一方子力大幅領先就不必走到底
+        let s = board.evaluate();
+        let red_score = if board.red_to_move { s } else { -s };
+        if red_score.abs() > 800 {
+            return red_score.signum() as i32;
+        }
     }
     let s = board.evaluate();
     let red_score = if board.red_to_move { s } else { -s };
     red_score.signum() as i32
+}
+
+/// 吃子導向選步：有吃子步時以 CAPTURE_BIAS 機率從吃子步中挑，否則隨機。
+fn pick_rollout_move(board: &Board, moves: &[Move], rng: &mut Rng) -> Move {
+    // 終點格有子 = 吃子步
+    let captures: Vec<Move> = moves
+        .iter()
+        .copied()
+        .filter(|&m| board.squares[(m >> 8) as usize] != 0)
+        .collect();
+    if !captures.is_empty() && rng.unit() < CAPTURE_BIAS {
+        captures[rng.below(captures.len())]
+    } else {
+        moves[rng.below(moves.len())]
+    }
 }

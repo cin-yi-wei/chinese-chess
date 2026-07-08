@@ -20,8 +20,8 @@ use engine::{best_move, best_move_mcts, best_move_mcts_strength, Board, Move};
 use serde::{Deserialize, Serialize};
 use tower_http::services::{ServeDir, ServeFile};
 
-/// MCTS 模擬次數（每步，自訂模式用）。
-const MCTS_ITERS: u32 = 3000;
+/// MCTS 模擬次數（每步，自訂模式用）。吃子導向 rollout 後調高以增強棋力。
+const MCTS_ITERS: u32 = 6000;
 
 /// 自訂難度 1~100 線性映射到 strength index z ∈ [-2, 2]（論文實測此段 z↔Elo 近線性）。
 fn difficulty_to_z(d: u8) -> f64 {
@@ -57,7 +57,7 @@ impl Difficulty {
         match self {
             Difficulty::Preset(Preset::Easy) => best_move(board, 2),
             Difficulty::Preset(Preset::Medium) => best_move(board, 4),
-            Difficulty::Preset(Preset::Hard) => best_move_mcts(board, 6000),
+            Difficulty::Preset(Preset::Hard) => best_move_mcts(board, 8000),
             Difficulty::Custom(d) => best_move_mcts_strength(board, MCTS_ITERS, difficulty_to_z(d)),
         }
     }
