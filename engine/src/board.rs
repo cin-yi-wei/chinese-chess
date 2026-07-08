@@ -98,6 +98,7 @@ fn square_forward(sq: i32, sd: u8) -> i32 {
 }
 
 /// 一個盤面狀態。
+#[derive(Clone)]
 pub struct Board {
     /// 每格棋子編碼；0 為空格。索引 0..256。
     pub squares: [u8; 256],

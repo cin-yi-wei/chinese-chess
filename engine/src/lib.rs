@@ -7,15 +7,17 @@
 //! 里程碑進度：
 //!   ② 盤面與著法產生、make/undo、將軍/將死  ✅
 //!   ④ 評估函式 + alpha-beta 搜尋            ✅
+//!   ⑥ axum WebSocket 服務（在 server crate） ✅
+//!   ⑤ MCTS                                   ✅
 //!   ③ Zobrist 重複盤面判定                  待辦
-//!   ⑤ MCTS                                   待辦
-//!   ⑥ axum WebSocket 服務（在 server crate） 待辦
 
 pub mod board;
+pub mod mcts;
 pub mod piece_value;
 pub mod search;
 
 pub use board::{Board, Move};
+pub use mcts::best_move_mcts;
 pub use search::{best_move, best_move_iterative};
 
 #[cfg(test)]
@@ -87,5 +89,15 @@ mod tests {
             v
         };
         assert!(legal.contains(&mv), "搜尋回傳的著法應為合法著法");
+    }
+
+    #[test]
+    fn mcts_returns_legal_move_from_start() {
+        // MCTS 應從開局回傳一個合法著法（少量迭代即可驗證流程）。
+        let b = Board::start();
+        let mv = best_move_mcts(&b, 200).expect("MCTS 應搜得著法");
+        let mut bb = Board::start();
+        let legal = bb.legal_moves();
+        assert!(legal.contains(&mv), "MCTS 回傳的著法應為合法著法");
     }
 }

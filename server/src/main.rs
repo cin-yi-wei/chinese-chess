@@ -36,8 +36,9 @@ async fn main() {
         .route("/ws", get(ws_handler))
         .fallback_service(frontend);
 
-    let addr = "127.0.0.1:3000";
-    let listener = tokio::net::TcpListener::bind(addr)
+    // 綁定位址可由環境變數覆寫，預設 127.0.0.1:3939（不用 3000）。
+    let addr = std::env::var("CHESS_BIND").unwrap_or_else(|_| "127.0.0.1:3939".to_string());
+    let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .expect("無法綁定位址");
     tracing::info!("象棋後端啟動於 http://{addr}");
