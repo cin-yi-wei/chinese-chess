@@ -56,15 +56,17 @@ jobs:
           --add-data "../frontend/dist${{ matrix.sep }}frontend/dist"
           app.py
 
-      - name: Zip artifact
+      - name: Zip artifact (Windows)
+        if: matrix.name == 'windows'
+        shell: pwsh
         working-directory: desktop/dist
-        shell: bash
+        run: Compress-Archive -Path XiangqiAZ -DestinationPath XiangqiAZ-windows.zip -Force
+
+      - name: Zip artifact (macOS)
+        if: matrix.name == 'macos'
+        working-directory: desktop/dist
         run: |
-          if [ -d "XiangqiAZ.app" ]; then
-            zip -r "XiangqiAZ-${{ matrix.name }}.zip" "XiangqiAZ.app"
-          else
-            zip -r "XiangqiAZ-${{ matrix.name }}.zip" "XiangqiAZ"
-          fi
+          if [ -d "XiangqiAZ.app" ]; then zip -r "XiangqiAZ-macos.zip" "XiangqiAZ.app"; else zip -r "XiangqiAZ-macos.zip" "XiangqiAZ"; fi
 
       - name: Upload to Release
         if: startsWith(github.ref, 'refs/tags/')
