@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>中國象棋</title>
+    <style>
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: #1e1a17;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        font-family: "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+        color: #e8ded0;
+      }
+      #status {
+        margin: 12px;
+        font-size: 18px;
+        letter-spacing: 1px;
+        min-height: 24px;
+      }
+      #new-game {
+        margin-bottom: 12px;
+        padding: 8px 20px;
+        font-size: 15px;
+        border: 1px solid #a9784b;
+        background: #2b2420;
+        color: #e8ded0;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      #new-game:hover { background: #3a302a; }
+      #game { box-shadow: 0 10px 40px rgba(0,0,0,.5); border-radius: 8px; }
+    </style>
+  </head>
+  <body>
+    <div id="status">連線中…</div>
+    <button id="new-game">重新開局</button>
+    <div id="game"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

@@ -308,6 +308,65 @@ impl Board {
         false
     }
 
+    /// 前端座標（x:0..=8 檔、y:0..=9 列，左上為原點）轉內部格編號。
+    #[inline]
+    pub fn coord_to_sq(x: u8, y: u8) -> u8 {
+        ((y + 3) << 4) + (x + 3)
+    }
+
+    /// 內部格編號轉前端座標 (x, y)。
+    #[inline]
+    pub fn sq_to_coord(sq: u8) -> (u8, u8) {
+        let x = (sq & 0x0f) - 3;
+        let y = (sq >> 4) - 3;
+        (x, y)
+    }
+
+    /// 輸出佈局 FEN（僅佈局欄位，與 START_FEN 同格式）。
+    pub fn to_fen(&self) -> String {
+        let mut fen = String::new();
+        for y in 0..10u8 {
+            if y > 0 {
+                fen.push('/');
+            }
+            let mut empty = 0;
+            for x in 0..9u8 {
+                let pc = self.squares[Self::coord_to_sq(x, y) as usize];
+                if pc == 0 {
+                    empty += 1;
+                    continue;
+                }
+                if empty > 0 {
+                    fen.push_str(&empty.to_string());
+                    empty = 0;
+                }
+                let ch = piece_to_char(pc & 7);
+                // 紅子（<16）大寫、黑子小寫
+                fen.push(if pc < BLACK_TAG {
+                    ch
+                } else {
+                    ch.to_ascii_lowercase()
+                });
+            }
+            if empty > 0 {
+                fen.push_str(&empty.to_string());
+            }
+        }
+        fen
+    }
+
+    /// 目前走子方的所有合法著法（已過濾送死）。供前端提示與驗證用。
+    pub fn legal_moves(&mut self) -> Vec<Move> {
+        let mut legal = Vec::new();
+        for mv in self.generate_moves() {
+            if self.make_move(mv) {
+                self.undo_make_move();
+                legal.push(mv);
+            }
+        }
+        legal
+    }
+
     /// 局面評估分值，以「目前走子方」視角回傳（正值對己方有利）。
     ///
     /// 對照 position.cpp 的 evaluate()：紅子查 PIECE_VALUE[type][sq]，
@@ -482,6 +541,20 @@ impl Board {
 impl Default for Board {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// 棋子種類轉 FEN 大寫字元。
+fn piece_to_char(pt: u8) -> char {
+    match pt {
+        PIECE_KING => 'K',
+        PIECE_ADVISOR => 'A',
+        PIECE_BISHOP => 'B',
+        PIECE_KNIGHT => 'N',
+        PIECE_ROOK => 'R',
+        PIECE_CANNON => 'C',
+        PIECE_PAWN => 'P',
+        _ => '?',
     }
 }
 
