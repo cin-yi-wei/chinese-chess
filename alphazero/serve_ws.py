@@ -32,7 +32,19 @@ STATIC = os.environ.get("CHESS_STATIC", "../frontend/dist")
 PORT = int(os.environ.get("CHESS_PORT", "3941"))
 
 torch.set_num_threads(os.cpu_count() or 4)  # CPU 推論用滿核心
-_device = "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def pick_device() -> str:
+    """優先 NVIDIA CUDA，其次 Apple Silicon MPS，最後 CPU。"""
+    if torch.cuda.is_available():
+        return "cuda"
+    mps = getattr(torch.backends, "mps", None)
+    if mps is not None and mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+_device = pick_device()
 _net = XiangqiNet(128, 10)
 _net.load_state_dict(torch.load(WEIGHTS, map_location=_device))
 _net.to(_device).eval()
