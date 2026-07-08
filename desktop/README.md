@@ -17,17 +17,34 @@ cd desktop && pip install -r requirements.txt
 python app.py
 ```
 
-## 打包成單一執行檔（PyInstaller，各平台各打一份）
-在該平台上執行：
+## 打包成單一執行檔（PyInstaller，各平台在該平台各打一份）
+
+**macOS / Linux**（--add-data 用 `:` 分隔）：
 ```
 cd desktop
 pyinstaller --noconfirm --windowed --name XiangqiAZ \
+  --paths ../alphazero \
+  --hidden-import serve_ws --hidden-import net --hidden-import mcts \
+  --hidden-import nn_eval --hidden-import xiangqi.board --hidden-import xiangqi.encode \
   --add-data "../frontend/dist:frontend/dist" \
   --add-data "../alphazero/checkpoints/latest.pt:checkpoints" \
   app.py
 ```
-（Windows 的 --add-data 分隔符是 `;` 不是 `:`。打包後 app.py 需把 CHESS_STATIC / CHESS_WEIGHTS
-指到 bundle 內的相對路徑——見 app.py 的環境變數，打包版再微調。）
+
+**Windows**（--add-data 用 `;` 分隔）：
+```
+cd desktop
+pyinstaller --noconfirm --windowed --name XiangqiAZ ^
+  --paths ../alphazero ^
+  --hidden-import serve_ws --hidden-import net --hidden-import mcts ^
+  --hidden-import nn_eval --hidden-import xiangqi.board --hidden-import xiangqi.encode ^
+  --add-data "../frontend/dist;frontend/dist" ^
+  --add-data "../alphazero/checkpoints/latest.pt;checkpoints" ^
+  app.py
+```
+
+app.py 已處理凍結後路徑（用 `sys._MEIPASS`），bundle 內結構為 `frontend/dist`、`checkpoints/latest.pt`、
+`alphazero/`（引擎），對得上上面 --add-data。torch/CUDA 檔很大，打包產物會偏大屬正常。
 
 ## 硬體
 - 有 NVIDIA GPU：CHESS_SIMS 可開 400~800+，每步 <1~2 秒、棋力好。

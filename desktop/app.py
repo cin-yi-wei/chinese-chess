@@ -17,14 +17,21 @@ import os
 import sys
 import threading
 
-# 讓 desktop/ 能匯入 alphazero/ 的引擎
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_AZ = os.path.join(os.path.dirname(_HERE), "alphazero")
-sys.path.insert(0, _AZ)
+# 路徑：開發時用 repo 相對路徑；PyInstaller 凍結後用解壓目錄 sys._MEIPASS
+if getattr(sys, "frozen", False):
+    _BASE = sys._MEIPASS  # type: ignore[attr-defined]
+    _AZ = os.path.join(_BASE, "alphazero")
+    _STATIC = os.path.join(_BASE, "frontend", "dist")
+    _WEIGHTS = os.path.join(_BASE, "checkpoints", "latest.pt")
+else:
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+    _AZ = os.path.join(os.path.dirname(_HERE), "alphazero")
+    _STATIC = os.path.join(os.path.dirname(_HERE), "frontend", "dist")
+    _WEIGHTS = os.path.join(_AZ, "checkpoints", "latest.pt")
 
-# 權重與靜態前端路徑（可用環境變數覆寫；打包時改指到 bundle 內）
-os.environ.setdefault("CHESS_WEIGHTS", os.path.join(_AZ, "checkpoints", "latest.pt"))
-os.environ.setdefault("CHESS_STATIC", os.path.join(os.path.dirname(_HERE), "frontend", "dist"))
+sys.path.insert(0, _AZ)
+os.environ.setdefault("CHESS_WEIGHTS", _WEIGHTS)
+os.environ.setdefault("CHESS_STATIC", _STATIC)
 os.environ.setdefault("CHESS_SIMS", "400")   # 有 GPU 可開大；純 CPU 建議調小
 os.environ.setdefault("CHESS_BATCH", "32")
 
