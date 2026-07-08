@@ -16,22 +16,51 @@ use axum::{
     routing::get,
     Router,
 };
-use engine::{best_move_mcts_strength, Board, Move};
+use engine::{best_move, best_move_mcts, best_move_mcts_strength, Board, Move};
 use serde::{Deserialize, Serialize};
 use tower_http::services::{ServeDir, ServeFile};
 
-/// MCTS 模擬次數（每步）。
+/// MCTS 模擬次數（每步，自訂模式用）。
 const MCTS_ITERS: u32 = 3000;
-
-/// 難度預設值（1~100）。
-fn default_difficulty() -> u8 {
-    50
-}
 
 /// 自訂難度 1~100 線性映射到 strength index z ∈ [-2, 2]（論文實測此段 z↔Elo 近線性）。
 fn difficulty_to_z(d: u8) -> f64 {
     let d = d.clamp(1, 100) as f64;
     -2.0 + (d - 1.0) / 99.0 * 4.0
+}
+
+/// 三種預設模式。
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+enum Preset {
+    Easy,
+    Medium,
+    Hard,
+}
+
+/// 難度：預設模式（字串）或自訂 1~100（數字）。
+#[derive(Deserialize, Clone, Copy)]
+#[serde(untagged)]
+enum Difficulty {
+    Preset(Preset),
+    Custom(u8),
+}
+
+fn default_difficulty() -> Difficulty {
+    Difficulty::Preset(Preset::Medium)
+}
+
+impl Difficulty {
+    /// 依難度選出 AI 著法。
+    /// 簡單=alpha-beta 深2、中等=深4、困難=MCTS(robust)、自訂=MCTS 線性棋力系統(z)。
+    fn pick(self, board: &mut Board) -> Option<Move> {
+        match self {
+            Difficulty::Preset(Preset::Easy) => best_move(board, 2),
+            Difficulty::Preset(Preset::Medium) => best_move(board, 4),
+            Difficulty::Preset(Preset::Hard) => best_move_mcts(board, 6000),
+            Difficulty::Custom(d) => best_move_mcts_strength(board, MCTS_ITERS, difficulty_to_z(d)),
+        }
+    }
 }
 
 #[tokio::main]
@@ -66,9 +95,9 @@ async fn ws_handler(ws: WebSocketUpgrade) -> impl IntoResponse {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ClientMsg {
     NewGame {
-        /// 自訂難度 1~100，映射到 MCTS 的 strength index z。
+        /// 難度：字串 "easy"/"medium"/"hard" 或 1~100 數字（自訂）。
         #[serde(default = "default_difficulty")]
-        difficulty: u8,
+        difficulty: Difficulty,
     },
     Move { from: [u8; 2], to: [u8; 2] },
 }
@@ -94,7 +123,7 @@ enum ServerMsg {
 /// 每條連線各自持有一局盤面。
 async fn handle_socket(mut socket: WebSocket) {
     let mut board = Board::start();
-    let mut difficulty: u8 = default_difficulty();
+    let mut difficulty: Difficulty = default_difficulty();
 
     while let Some(Ok(msg)) = socket.recv().await {
         let Message::Text(text) = msg else {
@@ -131,7 +160,7 @@ fn apply_human_then_ai(
     board: &mut Board,
     from: [u8; 2],
     to: [u8; 2],
-    difficulty: u8,
+    difficulty: Difficulty,
 ) -> Option<Option<[u8; 4]>> {
     let mv = engine::Board::coord_to_sq(from[0], from[1]) as Move
         | ((engine::Board::coord_to_sq(to[0], to[1]) as Move) << 8);
@@ -147,9 +176,8 @@ fn apply_human_then_ai(
         return Some(None);
     }
 
-    // AI 回手：難度 → z，用線性棋力系統選步
-    let z = difficulty_to_z(difficulty);
-    let ai_mv = best_move_mcts_strength(board, MCTS_ITERS, z)?;
+    // AI 回手（依難度：預設模式或自訂 z）
+    let ai_mv = difficulty.pick(board)?;
     board.make_move(ai_mv);
     Some(Some(move_to_coords(ai_mv)))
 }

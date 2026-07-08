@@ -35,14 +35,27 @@ class BoardScene extends Phaser.Scene {
     this.connect();
     this.input.on('pointerdown', (p) => this.onClick(p));
     document.getElementById('new-game').onclick = () => this.newGame();
+
     const diff = document.getElementById('difficulty');
     const diffVal = document.getElementById('difficulty-val');
     if (diff && diffVal) diff.oninput = () => (diffVal.textContent = diff.value);
+
+    // 模式切換：選「自訂」才顯示 1~100 滑桿
+    const mode = document.getElementById('mode');
+    const wrap = document.getElementById('custom-wrap');
+    if (mode && wrap) mode.onchange = () => (wrap.style.display = mode.value === 'custom' ? 'inline-flex' : 'none');
   }
 
   newGame() {
-    const el = document.getElementById('difficulty');
-    const difficulty = el ? parseInt(el.value, 10) : 50;
+    const mode = document.getElementById('mode');
+    const slider = document.getElementById('difficulty');
+    // 自訂 → 送 1~100 數字；預設模式 → 送字串
+    const difficulty =
+      mode && mode.value === 'custom'
+        ? (slider ? parseInt(slider.value, 10) : 50)
+        : mode
+          ? mode.value
+          : 'medium';
     this.busy = false;
     this.send({ type: 'new_game', difficulty });
   }

@@ -37,7 +37,18 @@
         justify-content: center;
       }
       #controls label { font-size: 14px; opacity: .85; }
-      #difficulty { cursor: pointer; vertical-align: middle; width: 160px; }
+      #mode {
+        padding: 8px 14px;
+        font-size: 15px;
+        border: 1px solid #a9784b;
+        background: #2b2420;
+        color: #e8ded0;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      #mode:hover { background: #3a302a; }
+      #custom-wrap { display: inline-flex; align-items: center; gap: 8px; }
+      #difficulty { cursor: pointer; vertical-align: middle; width: 140px; }
       #difficulty-val {
         display: inline-block;
         min-width: 2.2em;
@@ -70,9 +81,17 @@
   <body>
     <div id="status">連線中…</div>
     <div id="controls">
-      <label for="difficulty">自訂難度</label>
-      <input id="difficulty" type="range" min="1" max="100" value="50" />
-      <span id="difficulty-val">50</span>
+      <label for="mode">難度</label>
+      <select id="mode">
+        <option value="easy">簡單</option>
+        <option value="medium" selected>中等</option>
+        <option value="hard">困難</option>
+        <option value="custom">自訂</option>
+      </select>
+      <span id="custom-wrap" style="display: none">
+        <input id="difficulty" type="range" min="1" max="100" value="50" />
+        <span id="difficulty-val">50</span>
+      </span>
       <button id="new-game">重新開局</button>
     </div>
     <div id="game"></div>
