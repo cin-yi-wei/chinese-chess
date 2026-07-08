@@ -1,0 +1,5 @@
+# 訓練/推論（Windows 4070 Ti Super 上裝 CUDA 版 torch，見 pytorch.org）
+torch>=2.2
+numpy>=1.26
+# 本機驗證
+pytest>=8.0
