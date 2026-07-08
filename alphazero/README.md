@@ -17,11 +17,14 @@ ML 生態在 Python（PyTorch）。規則層從主線 Rust 引擎移植過來（
 3. 自我對弈訓練迴圈：自對弈產棋譜 → 訓練網路 → 更強網路再自對弈…反覆
 
 ## 進度（分階段）
-- [進行中] Phase 1：象棋規則 `xiangqi/board.py`（合法著法、make/undo、將軍/將死/勝負、FEN）+ 驗證
-- [ ] Phase 2：盤面→張量編碼 + 網路定義（PyTorch）
-- [ ] Phase 3：PUCT MCTS（NN 引導）
-- [ ] Phase 4：自我對弈 + 訓練迴圈 + 設定檔（在 4070TiS 上跑）
-- [ ] Phase 5：權重匯出 + 對弈推論整合到 web
+- [x] Phase 1：象棋規則 `xiangqi/board.py`（合法著法、make/undo、將軍/將死、FEN）— CPU 驗證 44 著法
+- [x] Phase 2：盤面編碼 `xiangqi/encode.py`（15×10×9 平面 + policy 索引 8100）+ 網路 `net.py`
+- [x] Phase 3：PUCT MCTS `mcts.py`（NN 引導、評估器可插拔）
+- [x] Phase 4：自我對弈 `selfplay.py` + 訓練迴圈 `train.py` + `config.py` + NN 評估器 `nn_eval.py`（在 4070TiS 上 `python train.py`）
+- [ ] Phase 5：權重匯出 + 對弈推論整合到 web（chess-test 或新網址）
+
+程式碼皆 py_compile 通過；純 Python 部分（規則/編碼/PUCT）在無 GPU 機實測過。
+含 torch 的（net/nn_eval/train）待在 4070TiS 首次執行驗證。
 
 ## Windows GPU 訓練設定（Phase 4 用，先記著）
 ```
