@@ -37,7 +37,16 @@
         justify-content: center;
       }
       #controls label { font-size: 14px; opacity: .85; }
-      #difficulty, #new-game {
+      #difficulty { cursor: pointer; vertical-align: middle; width: 160px; }
+      #difficulty-val {
+        display: inline-block;
+        min-width: 2.2em;
+        text-align: center;
+        font-variant-numeric: tabular-nums;
+        font-weight: bold;
+        color: #ffd479;
+      }
+      #new-game {
         padding: 8px 14px;
         font-size: 15px;
         border: 1px solid #a9784b;
@@ -46,7 +55,7 @@
         border-radius: 6px;
         cursor: pointer;
       }
-      #new-game:hover, #difficulty:hover { background: #3a302a; }
+      #new-game:hover { background: #3a302a; }
       /* RWD：棋盤等比縮放，同時受寬與高限制，直/橫都不跑版 */
       #game {
         width: min(96vw, calc((100dvh - 120px) * 604 / 668), 604px);
@@ -61,12 +70,9 @@
   <body>
     <div id="status">連線中…</div>
     <div id="controls">
-      <label for="difficulty">難度</label>
-      <select id="difficulty">
-        <option value="easy">簡單（淺層搜尋）</option>
-        <option value="medium" selected>中等（alpha-beta）</option>
-        <option value="hard">困難（MCTS）</option>
-      </select>
+      <label for="difficulty">自訂難度</label>
+      <input id="difficulty" type="range" min="1" max="100" value="50" />
+      <span id="difficulty-val">50</span>
       <button id="new-game">重新開局</button>
     </div>
     <div id="game"></div>

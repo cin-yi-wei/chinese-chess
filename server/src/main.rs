@@ -16,9 +16,23 @@ use axum::{
     routing::get,
     Router,
 };
-use engine::{best_move, best_move_mcts, Board, Move};
+use engine::{best_move_mcts_strength, Board, Move};
 use serde::{Deserialize, Serialize};
 use tower_http::services::{ServeDir, ServeFile};
+
+/// MCTS 模擬次數（每步）。
+const MCTS_ITERS: u32 = 3000;
+
+/// 難度預設值（1~100）。
+fn default_difficulty() -> u8 {
+    50
+}
+
+/// 自訂難度 1~100 線性映射到 strength index z ∈ [-2, 2]（論文實測此段 z↔Elo 近線性）。
+fn difficulty_to_z(d: u8) -> f64 {
+    let d = d.clamp(1, 100) as f64;
+    -2.0 + (d - 1.0) / 99.0 * 4.0
+}
 
 #[tokio::main]
 async fn main() {
@@ -52,31 +66,11 @@ async fn ws_handler(ws: WebSocketUpgrade) -> impl IntoResponse {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ClientMsg {
     NewGame {
-        #[serde(default)]
-        difficulty: Difficulty,
+        /// 自訂難度 1~100，映射到 MCTS 的 strength index z。
+        #[serde(default = "default_difficulty")]
+        difficulty: u8,
     },
     Move { from: [u8; 2], to: [u8; 2] },
-}
-
-/// AI 難度：簡單=alpha-beta 淺、中等=alpha-beta 深、困難=MCTS。
-#[derive(Deserialize, Clone, Copy, Default)]
-#[serde(rename_all = "snake_case")]
-enum Difficulty {
-    Easy,
-    #[default]
-    Medium,
-    Hard,
-}
-
-impl Difficulty {
-    /// 依難度選出 AI 著法。
-    fn pick(self, board: &mut Board) -> Option<Move> {
-        match self {
-            Difficulty::Easy => best_move(board, 2),
-            Difficulty::Medium => best_move(board, 4),
-            Difficulty::Hard => best_move_mcts(board, 6000),
-        }
-    }
 }
 
 #[derive(Serialize)]
@@ -100,7 +94,7 @@ enum ServerMsg {
 /// 每條連線各自持有一局盤面。
 async fn handle_socket(mut socket: WebSocket) {
     let mut board = Board::start();
-    let mut difficulty = Difficulty::default();
+    let mut difficulty: u8 = default_difficulty();
 
     while let Some(Ok(msg)) = socket.recv().await {
         let Message::Text(text) = msg else {
@@ -137,7 +131,7 @@ fn apply_human_then_ai(
     board: &mut Board,
     from: [u8; 2],
     to: [u8; 2],
-    difficulty: Difficulty,
+    difficulty: u8,
 ) -> Option<Option<[u8; 4]>> {
     let mv = engine::Board::coord_to_sq(from[0], from[1]) as Move
         | ((engine::Board::coord_to_sq(to[0], to[1]) as Move) << 8);
@@ -153,8 +147,9 @@ fn apply_human_then_ai(
         return Some(None);
     }
 
-    // AI 回手（依難度）
-    let ai_mv = difficulty.pick(board)?;
+    // AI 回手：難度 → z，用線性棋力系統選步
+    let z = difficulty_to_z(difficulty);
+    let ai_mv = best_move_mcts_strength(board, MCTS_ITERS, z)?;
     board.make_move(ai_mv);
     Some(Some(move_to_coords(ai_mv)))
 }

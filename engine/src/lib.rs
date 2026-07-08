@@ -17,7 +17,7 @@ pub mod piece_value;
 pub mod search;
 
 pub use board::{Board, Move};
-pub use mcts::best_move_mcts;
+pub use mcts::{best_move_mcts, best_move_mcts_strength};
 pub use search::{best_move, best_move_iterative};
 
 #[cfg(test)]
@@ -135,5 +135,17 @@ mod tests {
         let mut bb = Board::start();
         let legal = bb.legal_moves();
         assert!(legal.contains(&mv), "MCTS 回傳的著法應為合法著法");
+    }
+
+    #[test]
+    fn mcts_strength_returns_legal_move_various_z() {
+        // 線性棋力系統：不同 z（弱/中/強）都應回合法著法。
+        let b = Board::start();
+        let mut bb = Board::start();
+        let legal = bb.legal_moves();
+        for &z in &[-2.0f64, 0.0, 2.0] {
+            let mv = best_move_mcts_strength(&b, 300, z).expect("應搜得著法");
+            assert!(legal.contains(&mv), "z={z} 回傳的著法應為合法著法");
+        }
     }
 }

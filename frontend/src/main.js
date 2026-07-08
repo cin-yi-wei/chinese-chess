@@ -35,11 +35,14 @@ class BoardScene extends Phaser.Scene {
     this.connect();
     this.input.on('pointerdown', (p) => this.onClick(p));
     document.getElementById('new-game').onclick = () => this.newGame();
+    const diff = document.getElementById('difficulty');
+    const diffVal = document.getElementById('difficulty-val');
+    if (diff && diffVal) diff.oninput = () => (diffVal.textContent = diff.value);
   }
 
   newGame() {
     const el = document.getElementById('difficulty');
-    const difficulty = el ? el.value : 'medium';
+    const difficulty = el ? parseInt(el.value, 10) : 50;
     this.busy = false;
     this.send({ type: 'new_game', difficulty });
   }

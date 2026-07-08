@@ -1,13 +1,13 @@
 //! 蒙地卡羅樹搜尋（MCTS），對照 reference/cpp-console/mcts.cpp 的概念重寫。
 //!
-//! 原 C++ 版把 make/undo 與樹走訪耦合在一起、且 default_policy 只用單步評估差，
-//! 邏輯脆弱又有已知 bug。這裡改寫成標準乾淨版：
-//!   1. Selection：沿 UCB1 最佳子節點下探
-//!   2. Expansion：展開一個尚未嘗試的合法著法
-//!   3. Simulation：隨機對局 rollout 到深度上限，再以評估函式定勝負
-//!   4. Backpropagation：沿路更新 visits/wins
-//! 用 Board::clone() 複製盤面下探，避免手動 undo 的錯誤來源（引擎零外部相依，
-//! 亂數用內建 xorshift）。
+//! 標準乾淨版：Selection(UCB1) → Expansion → Simulation(隨機 rollout) → Backprop，
+//! 以 Board::clone() 下探避免手動 undo 的錯誤來源，亂數用內建 xorshift。
+//!
+//! 另實作「線性棋力系統」選步（參考交大吳毅成團隊 2019 論文
+//! Strength Adjustment and Assessment for MCTS-Based Programs）：
+//! 跑完 MCTS 後，對 root 各著法的模擬次數 N_i，用 strength index z 做
+//! softmax 抽樣 π_i ∝ N_i^z，並以門檻比 R_th 濾掉 N_i < N_1·R_th 的爛步。
+//! z 越大越強（z→∞ 等於選 N 最大）、z=0 隨機、z<0 變弱；z 與 Elo 近乎線性。
 
 use crate::board::{Board, Move};
 
@@ -17,6 +17,8 @@ const UCB_C: f64 = std::f64::consts::SQRT_2;
 const ROLLOUT_DEPTH: u32 = 40;
 /// 預設模擬次數。
 pub const DEFAULT_ITERATIONS: u32 = 4000;
+/// 棋力調整的門檻比：只考慮 N_i ≥ N_1·R_th 的著法，保證強度下限。
+pub const THRESHOLD_RATIO: f64 = 0.1;
 
 /// xorshift64 亂數（引擎不引入 rand crate，保持可編 WASM）。
 struct Rng(u64);
@@ -32,6 +34,10 @@ impl Rng {
     fn below(&mut self, n: usize) -> usize {
         (self.next_u64() % n as u64) as usize
     }
+    /// [0,1) 均勻浮點。
+    fn unit(&mut self) -> f64 {
+        (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
+    }
 }
 
 /// 以盤面內容導出非零種子，讓不同局面的 rollout 走向不同。
@@ -46,21 +52,21 @@ fn seed_from(board: &Board) -> u64 {
 }
 
 struct Node {
-    mv: Move,              // 抵達此節點的著法（根為 0）
-    parent: Option<usize>, // 父節點索引
+    mv: Move,
+    parent: Option<usize>,
     children: Vec<usize>,
-    untried: Vec<Move>, // 尚未展開的合法著法
-    red_to_move: bool,  // 此節點輪到誰走
+    untried: Vec<Move>,
+    red_to_move: bool,
     visits: f64,
     wins: f64,
-    terminal: bool, // 無合法著法（被將死）
+    terminal: bool,
 }
 
-/// 用 MCTS 從目前盤面選最佳著法；無合法著法回傳 None。
-pub fn best_move_mcts(root_board: &Board, iterations: u32) -> Option<Move> {
+/// 跑完整棵 MCTS，回傳 root 各子著法的 (著法, 模擬次數)。
+fn run_mcts(root_board: &Board, iterations: u32) -> Vec<(Move, f64)> {
     let root_moves = root_board.clone().legal_moves();
     if root_moves.is_empty() {
-        return None;
+        return Vec::new();
     }
 
     let mut nodes: Vec<Node> = Vec::new();
@@ -81,7 +87,7 @@ pub fn best_move_mcts(root_board: &Board, iterations: u32) -> Option<Move> {
         let mut board = root_board.clone();
         let mut cur = 0usize;
 
-        // 1) Selection：untried 空且有子節點時，沿 UCB1 下探
+        // 1) Selection
         loop {
             if nodes[cur].terminal || !nodes[cur].untried.is_empty() || nodes[cur].children.is_empty()
             {
@@ -102,7 +108,7 @@ pub fn best_move_mcts(root_board: &Board, iterations: u32) -> Option<Move> {
             cur = best_ci;
         }
 
-        // 2) Expansion：展開一個未嘗試著法
+        // 2) Expansion
         if !nodes[cur].terminal && !nodes[cur].untried.is_empty() {
             let idx = rng.below(nodes[cur].untried.len());
             let mv = nodes[cur].untried.swap_remove(idx);
@@ -125,7 +131,7 @@ pub fn best_move_mcts(root_board: &Board, iterations: u32) -> Option<Move> {
             cur = ci;
         }
 
-        // 3) Simulation：從 board 隨機對局，回傳以紅方視角的勝負（+1紅勝/-1黑勝/0和）
+        // 3) Simulation
         let result_red = rollout(&mut board, &mut rng);
 
         // 4) Backpropagation
@@ -133,7 +139,6 @@ pub fn best_move_mcts(root_board: &Board, iterations: u32) -> Option<Move> {
         while let Some(ni) = node_opt {
             let n = &mut nodes[ni];
             n.visits += 1.0;
-            // 抵達此節點的著法由「n.red_to_move 的對方」所走
             let mover_is_red = !n.red_to_move;
             n.wins += if result_red == 0 {
                 0.5
@@ -146,13 +151,70 @@ pub fn best_move_mcts(root_board: &Board, iterations: u32) -> Option<Move> {
         }
     }
 
-    // 選訪問次數最多的根子節點（robust child）
     nodes[0]
         .children
         .iter()
-        .map(|&ci| &nodes[ci])
-        .max_by(|a, b| a.visits.partial_cmp(&b.visits).unwrap())
-        .map(|n| n.mv)
+        .map(|&ci| (nodes[ci].mv, nodes[ci].visits))
+        .collect()
+}
+
+/// 用 MCTS 選最佳著法（訪問數最多，robust child）；無合法著法回傳 None。
+pub fn best_move_mcts(root_board: &Board, iterations: u32) -> Option<Move> {
+    run_mcts(root_board, iterations)
+        .into_iter()
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+        .map(|(mv, _)| mv)
+}
+
+/// 「線性棋力系統」選步：以 strength index `z` 調整棋力。
+///
+/// 跑完 MCTS 後，對 root 各著法模擬次數 N_i：先濾掉 N_i < N_1·R_th 的爛步，
+/// 再以 π_i ∝ N_i^z 做加權抽樣。z 越大越強（→∞ 即選最大），z=0 隨機，z<0 變弱。
+/// 無合法著法回傳 None。
+pub fn best_move_mcts_strength(root_board: &Board, iterations: u32, z: f64) -> Option<Move> {
+    let children = run_mcts(root_board, iterations);
+    if children.is_empty() {
+        return None;
+    }
+    let n_max = children.iter().map(|&(_, n)| n).fold(0.0f64, f64::max);
+    if n_max <= 0.0 {
+        return children.first().map(|&(mv, _)| mv);
+    }
+    // 門檻過濾：只留 N_i ≥ N_1·R_th
+    let floor = n_max * THRESHOLD_RATIO;
+    let candidates: Vec<(Move, f64)> = children
+        .iter()
+        .filter(|&&(_, n)| n >= floor && n > 0.0)
+        .copied()
+        .collect();
+    let pool = if candidates.is_empty() { children } else { candidates };
+
+    // 權重 w_i = N_i^z（z 很大時等於挑最大，直接回傳避免溢位）
+    if z >= 50.0 {
+        return pool
+            .into_iter()
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+            .map(|(mv, _)| mv);
+    }
+    let weights: Vec<f64> = pool.iter().map(|&(_, n)| n.powf(z)).collect();
+    let total: f64 = weights.iter().sum();
+    if !(total > 0.0) {
+        // 數值異常時退回訪問數最多
+        return pool
+            .into_iter()
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+            .map(|(mv, _)| mv);
+    }
+
+    let mut rng = Rng(seed_from(root_board) ^ 0xabcd_1234_5678_9f01);
+    let mut pick = rng.unit() * total;
+    for (i, &w) in weights.iter().enumerate() {
+        pick -= w;
+        if pick <= 0.0 {
+            return Some(pool[i].0);
+        }
+    }
+    pool.last().map(|&(mv, _)| mv)
 }
 
 /// 隨機對局到深度上限，回傳以紅方視角的勝負。
@@ -160,13 +222,11 @@ fn rollout(board: &mut Board, rng: &mut Rng) -> i32 {
     for _ in 0..ROLLOUT_DEPTH {
         let moves = board.legal_moves();
         if moves.is_empty() {
-            // 輪到走的一方被將死 → 對方勝
             return if board.red_to_move { -1 } else { 1 };
         }
         let mv = moves[rng.below(moves.len())];
         board.make_move(mv);
     }
-    // 到達深度上限：以評估函式定優劣（evaluate 為走子方視角，轉成紅方視角）
     let s = board.evaluate();
     let red_score = if board.red_to_move { s } else { -s };
     red_score.signum() as i32
