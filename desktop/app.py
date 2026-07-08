@@ -17,12 +17,13 @@ import os
 import sys
 import threading
 
-# 路徑：開發時用 repo 相對路徑；PyInstaller 凍結後用解壓目錄 sys._MEIPASS
+# 路徑：開發時用 repo 相對路徑；PyInstaller 凍結後用解壓目錄 sys._MEIPASS。
+# 權重不打包進執行檔——首次啟動從 GitHub Release 下載到使用者可寫目錄。
 if getattr(sys, "frozen", False):
     _BASE = sys._MEIPASS  # type: ignore[attr-defined]
     _AZ = os.path.join(_BASE, "alphazero")
     _STATIC = os.path.join(_BASE, "frontend", "dist")
-    _WEIGHTS = os.path.join(_BASE, "checkpoints", "latest.pt")
+    _WEIGHTS = os.path.join(os.path.expanduser("~"), ".xiangqi-az", "latest.pt")
 else:
     _HERE = os.path.dirname(os.path.abspath(__file__))
     _AZ = os.path.join(os.path.dirname(_HERE), "alphazero")
@@ -32,6 +33,24 @@ else:
 sys.path.insert(0, _AZ)
 os.environ.setdefault("CHESS_WEIGHTS", _WEIGHTS)
 os.environ.setdefault("CHESS_STATIC", _STATIC)
+# 權重下載來源（GitHub Release 的 latest.pt 附件；換強腦只要重傳附件）
+os.environ.setdefault(
+    "CHESS_WEIGHTS_URL",
+    "https://github.com/cin-yi-wei/chinese-chess/releases/latest/download/latest.pt",
+)
+
+
+def ensure_weight() -> None:
+    """權重不存在就從 Release 下載。"""
+    import urllib.request
+
+    path = os.environ["CHESS_WEIGHTS"]
+    if os.path.exists(path):
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    url = os.environ["CHESS_WEIGHTS_URL"]
+    print(f"下載權重 {url} -> {path}")
+    urllib.request.urlretrieve(url, path)
 os.environ.setdefault("CHESS_SIMS", "400")   # 有 GPU 可開大；純 CPU 建議調小
 os.environ.setdefault("CHESS_BATCH", "32")
 
@@ -55,6 +74,7 @@ def _run_server() -> None:
 
 
 def main() -> None:
+    ensure_weight()  # 權重先就位（serve_ws 匯入時會載入）
     t = threading.Thread(target=_run_server, daemon=True)
     t.start()
     # 等服務起來（載入 torch+權重需幾秒）

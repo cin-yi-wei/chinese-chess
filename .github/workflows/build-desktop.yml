@@ -1,0 +1,80 @@
+name: build-desktop
+
+# 打 tag（v*）或手動觸發 → Windows + macOS 各自用 PyInstaller 打包 → 掛到 GitHub Release。
+# 權重不打包，執行檔首次啟動從 Release 的 latest.pt 附件自動下載。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows
+            torch_extra: "--index-url https://download.pytorch.org/whl/cu121"
+            sep: ";"
+          - os: macos-latest
+            name: macos
+            torch_extra: ""
+            sep: ":"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm install
+          npm run build
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller pywebview aiohttp numpy
+          pip install torch ${{ matrix.torch_extra }}
+
+      - name: PyInstaller
+        working-directory: desktop
+        run: >
+          pyinstaller --noconfirm --windowed --name XiangqiAZ
+          --paths ../alphazero
+          --hidden-import serve_ws --hidden-import net --hidden-import mcts
+          --hidden-import nn_eval --hidden-import xiangqi.board --hidden-import xiangqi.encode
+          --add-data "../frontend/dist${{ matrix.sep }}frontend/dist"
+          app.py
+
+      - name: Zip artifact
+        working-directory: desktop/dist
+        shell: bash
+        run: |
+          if [ -d "XiangqiAZ.app" ]; then
+            zip -r "XiangqiAZ-${{ matrix.name }}.zip" "XiangqiAZ.app"
+          else
+            zip -r "XiangqiAZ-${{ matrix.name }}.zip" "XiangqiAZ"
+          fi
+
+      - name: Upload to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desktop/dist/XiangqiAZ-${{ matrix.name }}.zip
+
+      - name: Upload artifact (non-tag runs)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: XiangqiAZ-${{ matrix.name }}
+          path: desktop/dist/XiangqiAZ-${{ matrix.name }}.zip
