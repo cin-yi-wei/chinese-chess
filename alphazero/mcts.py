@@ -115,13 +115,9 @@ def _backprop_vloss(path, leaf_value: float) -> None:
         v = -v
 
 
-def puct_search_batched(root_board: Board, batch_evaluator, sims: int = 400,
-                        batch_size: int = 32, c_puct: float = 1.5):
-    """批次葉評估的 PUCT：一次收集 batch_size 個葉、打包成一次前向評估。
-
-    用 virtual loss 讓同批的下探路徑岔開，避免全部擠同一條。無合法著法回 None。
-    batch_evaluator 需有 .batch([(board, legal)...]) -> [(priors, value)...]。
-    """
+def _run_batched(root_board: Board, batch_evaluator, sims: int, batch_size: int,
+                 c_puct: float):
+    """跑批次葉評估 PUCT，回傳 root Node（供選步與 visit 分佈共用）。無合法著法回 None。"""
     root_legal = root_board.clone().legal_moves()
     if not root_legal:
         return None
@@ -161,8 +157,28 @@ def puct_search_batched(root_board: Board, batch_evaluator, sims: int = 400,
         for path, value in terminals:
             _backprop_vloss(path, value)
         done += n_collect
+    return root
 
+
+def puct_search_batched(root_board: Board, batch_evaluator, sims: int = 400,
+                        batch_size: int = 32, c_puct: float = 1.5):
+    """批次葉評估 PUCT，回傳訪問數最多的著法（robust child）。無合法著法回 None。"""
+    root = _run_batched(root_board, batch_evaluator, sims, batch_size, c_puct)
+    if root is None:
+        return None
     return max(root.children.items(), key=lambda kv: kv[1].n)[0]
+
+
+def visit_distribution_batched(root_board: Board, batch_evaluator, sims: int = 400,
+                               batch_size: int = 32, c_puct: float = 1.5):
+    """批次版 visit 分佈：回傳 root 各著法訪問次數（供自我對弈 policy 目標）。
+
+    自我對弈改用這個 + GPU 批次評估器，可大幅提升產棋譜吞吐（每步一次批次前向）。
+    """
+    root = _run_batched(root_board, batch_evaluator, sims, batch_size, c_puct)
+    if root is None:
+        return {}
+    return {mv: ch.n for mv, ch in root.children.items()}
 
 
 def visit_distribution(board: Board, evaluator=material_evaluator, sims: int = 400,

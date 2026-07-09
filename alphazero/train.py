@@ -37,7 +37,7 @@ def train() -> None:
         for _ in range(config.GAMES_PER_ITER):
             games.extend(
                 play_game(evaluator, config.SIMS, config.TEMP_MOVES,
-                          config.MAX_MOVES, config.C_PUCT)
+                          config.MAX_MOVES, config.C_PUCT, config.SELFPLAY_BATCH)
             )
         replay.append(games)
         data = [s for batch in replay for s in batch]

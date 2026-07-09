@@ -10,12 +10,12 @@ import random
 
 from xiangqi.board import Board
 from xiangqi.encode import board_to_planes, move_to_index, POLICY_SIZE
-from mcts import visit_distribution
+from mcts import visit_distribution_batched
 
 
 def play_game(evaluator, sims: int, temp_moves: int = 30, max_moves: int = 200,
-              c_puct: float = 1.5):
-    """回傳 [(planes, policy_target[8100], value_target)]。"""
+              c_puct: float = 1.5, batch_size: int = 32):
+    """回傳 [(planes, policy_target[8100], value_target)]。evaluator 需有 .batch()。"""
     b = Board.start()
     history = []  # (planes, dist, red_to_move)
     result = 0  # 紅方視角：+1 紅勝 / -1 黑勝 / 0 和
@@ -25,7 +25,7 @@ def play_game(evaluator, sims: int, temp_moves: int = 30, max_moves: int = 200,
             # 走子方無合法著法 = 被將死/困斃，該方負
             result = -1 if b.red_to_move else 1
             break
-        dist = visit_distribution(b, evaluator, sims, c_puct)
+        dist = visit_distribution_batched(b, evaluator, sims, batch_size, c_puct)
         history.append((board_to_planes(b), dist, b.red_to_move))
 
         moves = list(dist)

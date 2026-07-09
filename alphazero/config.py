@@ -7,6 +7,7 @@ BLOCKS = 10
 # 自我對弈
 GAMES_PER_ITER = 50      # 每輪自我對弈局數（正式可設數百~數千）
 SIMS = 200               # 每步 PUCT 模擬數（正式可設 400~800+）
+SELFPLAY_BATCH = 32      # 自我對弈批次葉評估大小（GPU 上可設 64~128 提升吞吐）
 TEMP_MOVES = 30          # 前幾步用溫度取樣增加多樣性，之後取最高訪問
 MAX_MOVES = 200          # 單局上限（達到判和）
 C_PUCT = 1.5
