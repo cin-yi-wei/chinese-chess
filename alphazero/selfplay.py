@@ -6,11 +6,29 @@
 
 from __future__ import annotations
 
+import math
 import random
 
-from xiangqi.board import Board
+from xiangqi.board import Board, BLACK_TAG
 from xiangqi.encode import board_to_planes, move_to_index, POLICY_SIZE
 from mcts import visit_distribution_batched
+
+# 子力價值（僅用於冷啟動時對「達步數上限」的局做梯度化勝負傾向；不影響走子/合法性）
+_PIECE_VAL = {1: 2.0, 2: 2.0, 3: 4.0, 4: 9.0, 5: 4.5, 6: 1.0}  # 士象馬車炮兵
+
+
+def _material_result(b: Board) -> float:
+    """紅方視角的子力傾向 ∈ (-1,1)，給達上限的局當 value 目標，避免價值頭空轉。"""
+    red = black = 0.0
+    for pc in b.squares:
+        if pc == 0:
+            continue
+        v = _PIECE_VAL.get(pc & 7, 0.0)
+        if pc < BLACK_TAG:
+            red += v
+        else:
+            black += v
+    return math.tanh((red - black) / 10.0)
 
 
 def play_game(evaluator, sims: int, temp_moves: int = 30, max_moves: int = 200,
@@ -18,12 +36,14 @@ def play_game(evaluator, sims: int, temp_moves: int = 30, max_moves: int = 200,
     """回傳 [(planes, policy_target[8100], value_target)]。evaluator 需有 .batch()。"""
     b = Board.start()
     history = []  # (planes, dist, red_to_move)
-    result = 0  # 紅方視角：+1 紅勝 / -1 黑勝 / 0 和
+    result = 0.0  # 紅方視角：+1 紅勝 / -1 黑勝 / 0 和
+    decisive = False  # 是否真的分出勝負（將死/困斃）
 
     for ply in range(max_moves):
         if not b.legal_moves():
             # 走子方無合法著法 = 被將死/困斃，該方負
-            result = -1 if b.red_to_move else 1
+            result = -1.0 if b.red_to_move else 1.0
+            decisive = True
             break
         dist = visit_distribution_batched(b, evaluator, sims, batch_size, c_puct)
         history.append((board_to_planes(b), dist, b.red_to_move))
@@ -44,6 +64,10 @@ def play_game(evaluator, sims: int, temp_moves: int = 30, max_moves: int = 200,
         else:
             chosen = max(dist, key=dist.get)
         b.make_move(chosen)
+
+    if not decisive:
+        # 達步數上限、未分勝負：用子力差當梯度化的 value 目標（冷啟動 bootstrap）
+        result = _material_result(b)
 
     samples = []
     for planes, dist, red in history:

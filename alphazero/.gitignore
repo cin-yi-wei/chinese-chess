@@ -1,0 +1,10 @@
+# 本機訓練環境 / 暫存產物（不進 git）
+.venv/
+config.py.orig
+training.log
+__pycache__/
+
+# 檢查點：只追蹤 latest.pt（供其他分支拿訓練結果）；
+# 中間權重(net_*.pt)、優化器狀態(train_state.pt)、經驗回放(replay.pt)、worker 暫存皆不進 git
+checkpoints/*
+!checkpoints/latest.pt

@@ -5,12 +5,15 @@ CHANNELS = 128
 BLOCKS = 10
 
 # 自我對弈
-GAMES_PER_ITER = 50      # 每輪自我對弈局數（正式可設數百~數千）
-SIMS = 200               # 每步 PUCT 模擬數（正式可設 400~800+）
-SELFPLAY_BATCH = 32      # 自我對弈批次葉評估大小（GPU 上可設 64~128 提升吞吐）
+GAMES_PER_ITER = 12      # 每輪自我對弈局數（小值→每輪快、存檔密；replay 會跨輪累積補足資料量）
+SIMS = 400               # 每步 PUCT 模擬數
+SELFPLAY_BATCH = 96      # 批次葉評估大小（速度/搜尋品質權衡；非記憶體瓶頸）
 TEMP_MOVES = 30          # 前幾步用溫度取樣增加多樣性，之後取最高訪問
 MAX_MOVES = 200          # 單局上限（達到判和）
 C_PUCT = 1.5
+
+# 執行控制
+MAX_MINUTES = 0          # 0=不限時，持續訓練直到手動停止；>0 則跑完當前輪就停
 
 # 訓練
 ITERATIONS = 1000        # 自我對弈↔訓練 的大迴圈輪數
