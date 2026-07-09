@@ -56,7 +56,6 @@ os.environ.setdefault("CHESS_BATCH", "32")
 
 PORT = int(os.environ.get("CHESS_PORT", "8611"))
 
-import webview  # noqa: E402
 from aiohttp import web  # noqa: E402
 
 
@@ -88,8 +87,23 @@ def main() -> None:
         except Exception:
             time.sleep(1)
 
-    webview.create_window("中國象棋 AlphaZero", f"http://127.0.0.1:{PORT}/", width=680, height=800)
-    webview.start()
+    url = f"http://127.0.0.1:{PORT}/"
+    # 優先開原生視窗（pywebview）；失敗（如 Windows 的 pythonnet/clr 打包問題）就退回系統瀏覽器。
+    try:
+        import webview
+        webview.create_window("中國象棋 AlphaZero", url, width=680, height=800)
+        webview.start()
+    except Exception as e:
+        print(f"pywebview 開視窗失敗（{e}），改用系統瀏覽器開啟：{url}")
+        import webbrowser
+        import time
+        webbrowser.open(url)
+        # 保持行程存活（伺服器在背景執行緒），否則視窗/瀏覽器一開程式就結束
+        try:
+            while True:
+                time.sleep(3600)
+        except KeyboardInterrupt:
+            pass
 
 
 if __name__ == "__main__":
