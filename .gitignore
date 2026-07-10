@@ -17,3 +17,22 @@ cpp-port/build/
 __pycache__/
 *.pyc
 alphazero/**/__pycache__/
+.venv/
+alphazero/.venv/
+
+# px0 巢狀 clone（另一個 git repo；改動見 docs/px0-xiangqi-python.patch）
+/px0/
+
+# 權重 / 模型（可從 pxzero-networks 下載 + leela2onnx 重生，太大不進 git）
+*.onnx
+*.pb.gz
+alphazero/checkpoints*/
+
+# 執行期產物 / log
+*.log
+*.csv
+build_*.log
+
+# Windows 建置暫存
+px0/builddir/
+*.tmp
