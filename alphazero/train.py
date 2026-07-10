@@ -34,6 +34,13 @@ def _paths():
             os.path.join(d, "replay.pt"))
 
 
+def _atomic_save(obj, path):
+    """先寫 .tmp 再 os.replace,避免中途被殺造成半寫的壞檔。"""
+    tmp = path + ".tmp"
+    torch.save(obj, tmp)
+    os.replace(tmp, path)
+
+
 def _games_to_tensors(games):
     """把一輪 self-play 的樣本 list[(planes, pol, z)] 轉成緊湊 tensor 三元組（CPU）。"""
     planes = torch.tensor([s[0] for s in games], dtype=torch.float32)
@@ -73,23 +80,36 @@ def train() -> None:
 
     replay: deque = deque(maxlen=config.REPLAY_WINDOW)  # 每項 = (planes, pol, z) CPU tensors
     start_iter = _resume(net, opt, device, replay)
+
+    num_workers = getattr(config, "NUM_WORKERS", 1)
+    pool = None
+    worker_weights = os.path.join(config.CKPT_DIR, "_worker.pt")
+    if num_workers > 1:
+        from parallel import SelfPlayPool
+        pool = SelfPlayPool(num_workers, config.CHANNELS, config.BLOCKS)
     print(f"self-play: SIMS={config.SIMS}, BATCH={config.SELFPLAY_BATCH}, "
-          f"GAMES_PER_ITER={config.GAMES_PER_ITER}", flush=True)
+          f"GAMES_PER_ITER={config.GAMES_PER_ITER}, WORKERS={num_workers}", flush=True)
 
     run_start = time.time()
     max_seconds = config.MAX_MINUTES * 60 if getattr(config, "MAX_MINUTES", 0) else None
 
-    for it in range(start_iter, config.ITERATIONS):
+    try:
+      for it in range(start_iter, config.ITERATIONS):
         # 1) 自我對弈（用目前網路，批次葉評估）
         net.eval()
-        evaluator = NNEvaluator(net, device)
         t0 = time.time()
-        games = []
-        for _ in range(config.GAMES_PER_ITER):
-            games.extend(
-                play_game(evaluator, config.SIMS, config.TEMP_MOVES,
-                          config.MAX_MOVES, config.C_PUCT, config.SELFPLAY_BATCH)
-            )
+        if pool is not None:
+            _atomic_save(net.state_dict(), worker_weights)  # 給 worker 載入的當前權重
+            games = pool.generate(worker_weights, it, config.GAMES_PER_ITER)
+        else:
+            evaluator = NNEvaluator(net, device)
+            games = []
+            for _ in range(config.GAMES_PER_ITER):
+                games.extend(
+                    play_game(evaluator, config.SIMS, config.TEMP_MOVES,
+                              config.MAX_MOVES, config.C_PUCT, config.SELFPLAY_BATCH,
+                              config.DIRICHLET_ALPHA, config.DIRICHLET_FRAC)
+                )
         sp_dt = time.time() - t0
         replay.append(_games_to_tensors(games))
 
@@ -98,9 +118,13 @@ def train() -> None:
         PI = torch.cat([b[1] for b in replay], 0)
         Z = torch.cat([b[2] for b in replay], 0)
         N = X.shape[0]
+        # value 目標的分布：|z|>0.5 的比例 = 有多少「決定性」訊號（越高代表價值頭越有東西可學）
+        zabs = Z.abs()
+        decisive = (zabs > 0.5).float().mean().item()
         print(f"[iter {it}] self-play {config.GAMES_PER_ITER} games -> {len(games)} samples "
               f"in {sp_dt:.0f}s ({config.GAMES_PER_ITER / sp_dt * 60:.1f} games/min); "
-              f"replay total={N}", flush=True)
+              f"replay total={N}; |z|>0.5={decisive*100:.0f}% mean|z|={zabs.mean().item():.2f}",
+              flush=True)
 
         # 2) 訓練
         net.train()
@@ -127,10 +151,10 @@ def train() -> None:
 
         # 3) 存檔：latest.pt 純 state_dict（供 prod）；訓練狀態 + replay 另存（供續訓）
         ckpt = os.path.join(config.CKPT_DIR, f"net_{it:04d}.pt")
-        torch.save(net.state_dict(), ckpt)
-        torch.save(net.state_dict(), latest_path)
-        torch.save({"opt": opt.state_dict(), "iter": it}, ts_path)
-        torch.save(list(replay), replay_path)
+        _atomic_save(net.state_dict(), ckpt)
+        _atomic_save(net.state_dict(), latest_path)
+        _atomic_save({"opt": opt.state_dict(), "iter": it}, ts_path)
+        _atomic_save(list(replay), replay_path)
         lp = loss_p.item() if loss_p is not None else float("nan")
         lv = loss_v.item() if loss_v is not None else float("nan")
         elapsed = (time.time() - run_start) / 60
@@ -142,6 +166,9 @@ def train() -> None:
             print(f"reached MAX_MINUTES={config.MAX_MINUTES}; stopping after iter {it}. "
                   f"Re-run to resume.", flush=True)
             break
+    finally:
+        if pool is not None:
+            pool.close()
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import math
+import random
 
 from xiangqi.board import Board, BLACK_TAG
 
@@ -115,9 +116,27 @@ def _backprop_vloss(path, leaf_value: float) -> None:
         v = -v
 
 
+def _add_dirichlet_noise(root: Node, legal, alpha: float, frac: float) -> None:
+    """在根節點 prior 混入 Dirichlet 雜訊（AlphaZero 自我對弈探索用）。純 Python 取樣。
+
+    P <- (1-frac)*P + frac*noise，noise ~ Dir(alpha)。只用於自我對弈；推論不加。
+    """
+    if frac <= 0.0 or not legal:
+        return
+    g = [random.gammavariate(alpha, 1.0) for _ in legal]
+    s = sum(g) or 1.0
+    for mv, gi in zip(legal, g):
+        ch = root.children.get(mv)
+        if ch is not None:
+            ch.prior = (1.0 - frac) * ch.prior + frac * (gi / s)
+
+
 def _run_batched(root_board: Board, batch_evaluator, sims: int, batch_size: int,
-                 c_puct: float):
-    """跑批次葉評估 PUCT，回傳 root Node（供選步與 visit 分佈共用）。無合法著法回 None。"""
+                 c_puct: float, dir_alpha: float = 0.0, dir_frac: float = 0.0):
+    """跑批次葉評估 PUCT，回傳 root Node（供選步與 visit 分佈共用）。無合法著法回 None。
+
+    dir_frac>0 時於根節點加 Dirichlet 雜訊（自我對弈探索）。
+    """
     root_legal = root_board.clone().legal_moves()
     if not root_legal:
         return None
@@ -125,6 +144,7 @@ def _run_batched(root_board: Board, batch_evaluator, sims: int, batch_size: int,
     priors0, _ = batch_evaluator.batch([(root_board, root_legal)])[0]
     for mv in root_legal:
         root.children[mv] = Node(priors0.get(mv, 0.0))
+    _add_dirichlet_noise(root, root_legal, dir_alpha, dir_frac)
 
     done = 0
     while done < sims:
@@ -170,12 +190,15 @@ def puct_search_batched(root_board: Board, batch_evaluator, sims: int = 400,
 
 
 def visit_distribution_batched(root_board: Board, batch_evaluator, sims: int = 400,
-                               batch_size: int = 32, c_puct: float = 1.5):
+                               batch_size: int = 32, c_puct: float = 1.5,
+                               dir_alpha: float = 0.0, dir_frac: float = 0.0):
     """批次版 visit 分佈：回傳 root 各著法訪問次數（供自我對弈 policy 目標）。
 
     自我對弈改用這個 + GPU 批次評估器，可大幅提升產棋譜吞吐（每步一次批次前向）。
+    dir_frac>0 時加根節點 Dirichlet 探索雜訊。
     """
-    root = _run_batched(root_board, batch_evaluator, sims, batch_size, c_puct)
+    root = _run_batched(root_board, batch_evaluator, sims, batch_size, c_puct,
+                        dir_alpha, dir_frac)
     if root is None:
         return {}
     return {mv: ch.n for mv, ch in root.children.items()}
