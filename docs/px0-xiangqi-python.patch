@@ -1,0 +1,87 @@
+diff --git a/scripts/gen_py_bindings.py b/scripts/gen_py_bindings.py
+index 35d1bb0..f2fa614 100755
+--- a/scripts/gen_py_bindings.py
++++ b/scripts/gen_py_bindings.py
+@@ -33,7 +33,7 @@ from pybind.parameters import (StringParameter, ClassParameter,
+                                ListOfStringsParameter)
+ from pybind.retval import (StringViewRetVal, StringRetVal, ListOfStringsRetVal,
+                            NumericRetVal, ObjCopyRetval, ObjOwnerRetval,
+-                           ObjTupleRetVal, IntegralTupleRetVal)
++                           ObjTupleRetVal, IntegralTupleRetVal, BytesRetVal)
+ from pybind.exceptions import CppException
+ 
+ # Module
+@@ -70,6 +70,7 @@ input.AddMethod('mask').AddParameter(NumericParameter('plane')).AddRetVal(
+ input.AddMethod('val').AddParameter(NumericParameter('plane')).AddRetVal(
+     NumericRetVal('f32')).AddEx(ex)
+ input.AddMethod('clone').AddRetVal(ObjOwnerRetval(input))
++input.AddMethod('expand').AddRetVal(BytesRetVal()).AddEx(ex)
+ 
+ # Output class
+ output = mod.AddClass(
+diff --git a/scripts/pybind/retval.py b/scripts/pybind/retval.py
+index 2043fd6..2660d55 100644
+--- a/scripts/pybind/retval.py
++++ b/scripts/pybind/retval.py
+@@ -76,6 +76,15 @@ class StringRetVal(GenericStringRetVal):
+                 f'{self.cpp_val()}.data(), {self.cpp_val()}.size());')
+ 
+ 
++class BytesRetVal(RetVal):
++    def cpp_type(self):
++        return 'std::string'
++
++    def GenerateConversion(self, w):
++        w.Write(f'{self.py_val()} = Py_BuildValue("y#", '
++                f'{self.cpp_val()}.data(), {self.cpp_val()}.size());')
++
++
+ class ListOfStringsRetVal(RetVal):
+     def cpp_type(self):
+         return 'std::vector<std::string>'
+diff --git a/src/python/weights.h b/src/python/weights.h
+index 53ad096..626a48f 100644
+--- a/src/python/weights.h
++++ b/src/python/weights.h
+@@ -102,7 +102,7 @@ class Input {
+   }
+   uint64_t mask(int plane) const {
+     CheckPlaneExists(plane);
+-    return data_[plane].mask;
++    return static_cast<uint64_t>(data_[plane].mask);
+   }
+   float val(int plane) const {
+     CheckPlaneExists(plane);
+@@ -111,6 +111,23 @@ class Input {
+   std::unique_ptr<Input> clone() const {
+     return std::make_unique<Input>(data_);
+   }
++  // Expand all planes to a raw float32 byte buffer of [kInputPlanes * 90]
++  // (row-major over 90 xiangqi squares: square idx = rank*9 + file). Returned
++  // as bytes so Python can np.frombuffer() with zero per-element conversion.
++  // Runs in C++ where __uint128_t works, so bits 64..89 are preserved
++  // (Python mask() truncates to 64 bits).
++  std::string expand() const {
++    std::string buf(data_.size() * 90 * sizeof(float), '\0');
++    float* out = reinterpret_cast<float*>(buf.data());
++    for (size_t p = 0; p < data_.size(); ++p) {
++      const auto mask = data_[p].mask;
++      const float v = data_[p].value;
++      for (int i = 0; i < 90; ++i) {
++        if ((mask >> i) & 1) out[p * 90 + i] = v;
++      }
++    }
++    return buf;
++  }
+ 
+   // Not exported.
+   const InputPlanes GetPlanes() const { return data_; }
+@@ -271,7 +288,7 @@ class GameState {
+     std::vector<std::string> result;
+     for (auto m : ms) {
+       if (is_black) m.Flip();
+-      result.push_back(m.ToString(is_c960_));
++      result.push_back(m.ToString());
+     }
+     return result;
+   }
