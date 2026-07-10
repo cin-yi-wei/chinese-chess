@@ -123,6 +123,9 @@ px0 側：**33MB 網路 + 400 sims + batch=8 + 隨機開局**。
 - `alphazero/verify_px0_mapping.py` — FEN + 著法映射驗證（11993 局面 0 失敗）。
 - `alphazero/eval_px0_vs_oppd.py` — 對 Rust oppd 隨機開局勝率評測。
 - `alphazero/serve_px0.py` — **網頁對弈 GUI（自足版）**：純 Python 標準庫 HTTP 伺服器 + 內嵌單檔象棋盤 HTML，無 aiohttp/torch/npm 相依，只需 onnxruntime。人執紅、AI(px0) 執黑。伺服器維持 Board 狀態(move_stack)以提供正確 8 步歷史。用法：`PX0_ONNX=../px0/nets/net_33mb.onnx python serve_px0.py` → 開 http://127.0.0.1:3941。
+- `alphazero/px0_encode.py` + `px0_movestrs.json` — **純 Python 輸入編碼 + 著法索引（路 B，零 C++）**。
+- `alphazero/verify_px0_encode.py` — 純 Python 編碼 vs 綁定 golden reference bit-exact 驗證。
+- **桌面版（免安裝三平台）**：`desktop/app_px0.py`（pywebview + serve_px0，無 torch/aiohttp/前端建置）+ `.github/workflows/build-desktop-px0.yml`（Win/Mac/Linux CI PyInstaller，onnxruntime，數百MB）。打 tag `v*-px0` 或手動 dispatch 觸發；產物免安裝雙擊即用；首次啟動下載 `net.onnx`（需先上傳到 weights release）。Windows 用 DirectML(GPU 免 CUDA)、Mac CPU/CoreML、Linux CPU。
 - `alphazero/mcts.py`（沿用）— PUCT MCTS，`puct_search_batched` / `visit_distribution_batched`。
 - `alphazero/xiangqi/board.py`、`encode.py`（沿用）— 象棋盤面/規則。
 - `engine/src/bin/oppd.rs`、`engine/src/search.rs`（TT）— Rust 對手守護程序 + 加速。
@@ -167,11 +170,12 @@ ninja -C build lc0
 ### 兩條路讓「輸入編碼 + 著法索引」在 Ubuntu 可用
 
 - **路 A（簡單）：重編 px0 綁定**（上面 `ninja -C build` 加 `backends` target），得到 Linux 的 `backends.*.so`。`Px0Evaluator` 照用（`px0_eval.py` 的 `_PX0_BUILDDIR` 指到 build 目錄）。
-- **路 B（最乾淨，推薦給 prod）：純 Python 重寫輸入編碼 + 著法索引**，整套零 C++ 相依，只要 `board.py + mcts.py + px0_eval_pure.py + onnxruntime + net.onnx`。
-  - 需重寫兩件事（規格見第 4 節 + px0 `src/neural/encoder.cc` 的 `EncodePositionForNN` 和 `MoveToNNIndex`）：
-    1. 124-plane 輸入編碼（14 棋子 ours/theirs ×8 歷史 + 重複 plane + 4 aux；歷史有 flip 交替）。
-    2. 著法 → 2062 維 policy 索引（`MoveToNNIndex`）。
-  - **這份 Windows session 還沒做 B**（目前用綁定）。如果要 B，可以叫這個 Windows session 幫忙把 encoder.cc 的 `MoveToNNIndex` 讀出來、產出純 Python 版本 + 用綁定當「golden reference」逐局面比對驗證。
+- **路 B（最乾淨，推薦給 prod）：純 Python 輸入編碼 + 著法索引 —— ✅ 已完成**，整套零 C++ 相依。
+  - `alphazero/px0_encode.py`：純 Python 複製 `EncodePositionForNN`（124 plane）+ `MoveToNNIndex`（2062）。搭 `alphazero/px0_movestrs.json`（2062 著法模板表，從 encoder.cc `kMoveStrs` 抽出）。
+  - `alphazero/px0_eval.py` 已改用 px0_encode → **評估器只需 `numpy + onnxruntime`，不 import 綁定**。
+  - 驗證 `alphazero/verify_px0_encode.py`（用綁定當 golden reference）：平面 bit-exact（僅極罕見重複面差 4/4796，隨機自對弈才觸發、對輸出無影響）、著法索引 100% 一致、**網路 value/policy 輸出差 0**。
+  - 關鍵細節（若要移植他處）：走子方擺底端（net_rank = 紅走 9-y、黑走 y；net_file=x）；8 歷史格全用當前走子方視角；px0 棋子順序 rook/advisor/cannon/pawn/knight/bishop/king；著法索引黑走要先翻 rank；rule50 plane = 最近未吃子連續步數(上限8)。
+  - **Ubuntu 用路 B 即可,完全不用編 px0 綁定**(綁定只在轉 .onnx 的 leela2onnx 那步用得到,那步可在任一台做一次)。
 
 ### 跑起來
 ```python
