@@ -74,6 +74,12 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        if self.path == "/health":
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
         if self.path in ("/", "/index.html"):
             body = INDEX_HTML.encode("utf-8")
             self.send_response(200)

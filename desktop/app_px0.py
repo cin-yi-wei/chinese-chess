@@ -1,0 +1,87 @@
+"""中國象棋 px0 桌面版（Windows / macOS / Linux）。
+
+用 px0 強權重（經 ONNX）+ 自製 PUCT MCTS，跑本機對弈服務（serve_px0，純 Python + onnxruntime，
+零 C++ 相依），pywebview 開視窗。相比舊 torch 版：無 torch/CUDA（打包從 ~2.4GB 降到數百 MB）、
+無需前端建置（serve_px0 內嵌棋盤 HTML）、三平台皆可上 Release。
+
+執行（開發）：
+    pip install pywebview onnxruntime numpy   # Windows GPU 用 onnxruntime-directml
+    PX0_ONNX=../px0/nets/net_33mb.onnx python app_px0.py
+打包見 .github/workflows/build-desktop-px0.yml（CI 三平台）。權重不打包，首次啟動從 Release 下載。
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import threading
+import time
+
+# 凍結後（PyInstaller）用解壓目錄；開發時用 repo 相對路徑。
+if getattr(sys, "frozen", False):
+    _BASE = sys._MEIPASS  # type: ignore[attr-defined]
+    _AZ = os.path.join(_BASE, "alphazero")
+    _ONNX = os.path.join(os.path.expanduser("~"), ".xiangqi-px0", "net.onnx")
+else:
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+    _AZ = os.path.join(os.path.dirname(_HERE), "alphazero")
+    _ONNX = os.environ.get(
+        "PX0_ONNX", os.path.join(os.path.dirname(_HERE), "px0", "nets", "net_33mb.onnx"))
+
+sys.path.insert(0, _AZ)
+os.environ["PX0_ONNX"] = _ONNX
+os.environ.setdefault("CHESS_SIMS", "400")
+os.environ.setdefault("CHESS_BATCH", "8")
+# 權重（.onnx）下載來源：使用者需在 Release 上傳 net.onnx 附件（換強腦只要重傳）。
+os.environ.setdefault(
+    "PX0_ONNX_URL",
+    "https://github.com/cin-yi-wei/chinese-chess/releases/download/weights/net.onnx",
+)
+PORT = int(os.environ.setdefault("CHESS_PORT", "8611"))
+
+
+def ensure_onnx() -> None:
+    if os.path.exists(_ONNX):
+        return
+    import urllib.request
+    os.makedirs(os.path.dirname(_ONNX), exist_ok=True)
+    url = os.environ["PX0_ONNX_URL"]
+    print(f"下載權重 {url} -> {_ONNX}")
+    urllib.request.urlretrieve(url, _ONNX)
+
+
+def _run_server() -> None:
+    import serve_px0
+    serve_px0.main()   # ThreadingHTTPServer.serve_forever（阻塞→在此執行緒）
+
+
+def main() -> None:
+    ensure_onnx()      # serve_px0 匯入時會建 Px0Evaluator（載入 onnx）
+    threading.Thread(target=_run_server, daemon=True).start()
+
+    import urllib.request
+    for _ in range(120):
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{PORT}/health", timeout=1)
+            break
+        except Exception:
+            time.sleep(1)
+
+    url = f"http://127.0.0.1:{PORT}/"
+    try:
+        import webview
+        webview.create_window("中國象棋 · px0", url, width=520, height=620)
+        webview.start()
+    except Exception as e:
+        print(f"pywebview 開視窗失敗（{e}），改用系統瀏覽器：{url}")
+        import webbrowser
+        webbrowser.open(url)
+        try:
+            while True:
+                time.sleep(3600)
+        except KeyboardInterrupt:
+            pass
+
+
+if __name__ == "__main__":
+    main()

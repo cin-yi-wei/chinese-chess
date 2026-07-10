@@ -10,7 +10,7 @@ from __future__ import annotations
 import random
 
 from xiangqi.board import Board
-from px0_eval import board_to_px0_fen, my_move_to_px0  # 也會把 px0 builddir 加進 sys.path
+from px0_encode import board_to_px0_fen, my_move_to_px0
 import backends
 
 

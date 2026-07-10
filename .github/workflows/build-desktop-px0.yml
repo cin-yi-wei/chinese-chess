@@ -1,0 +1,90 @@
+name: build-desktop-px0
+
+# px0(ONNX)桌面版：Windows / macOS / Linux 三平台各用 PyInstaller 打包。
+# 相比 torch 版：無 torch/CUDA(數百 MB 而非 2.4GB)、無需前端建置(serve_px0 內嵌棋盤 HTML)、
+# 三平台皆可上 Release、且多了 Linux。權重(.onnx)不打包,首次啟動從 Release 的 weights 附件下載。
+# 觸發:打 tag(v*-px0)或手動。
+on:
+  push:
+    tags: ["*-px0"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows
+            ort: onnxruntime-directml   # Windows GPU(DirectML,免 CUDA)
+            sep: ";"
+          - os: macos-latest
+            name: macos
+            ort: onnxruntime            # macOS(CPU/CoreML)
+            sep: ":"
+          - os: ubuntu-latest
+            name: linux
+            ort: onnxruntime            # Linux(CPU;要 GPU 可自行換 onnxruntime-gpu)
+            sep: ":"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller pywebview numpy ${{ matrix.ort }}
+
+      - name: PyInstaller
+        working-directory: desktop
+        run: >
+          pyinstaller --noconfirm --windowed --name XiangqiPx0
+          --paths ../alphazero
+          --hidden-import serve_px0 --hidden-import px0_eval --hidden-import px0_encode
+          --hidden-import mcts --hidden-import xiangqi.board --hidden-import xiangqi.encode
+          --hidden-import onnxruntime --hidden-import numpy
+          --add-data "../alphazero/px0_movestrs.json${{ matrix.sep }}alphazero"
+          app_px0.py
+
+      - name: Zip (Windows)
+        if: matrix.name == 'windows'
+        shell: pwsh
+        working-directory: desktop/dist
+        run: Compress-Archive -Path XiangqiPx0 -DestinationPath XiangqiPx0-windows.zip -Force
+
+      - name: Zip (macOS/Linux)
+        if: matrix.name != 'windows'
+        working-directory: desktop/dist
+        run: |
+          if [ -d "XiangqiPx0.app" ]; then zip -r "XiangqiPx0-${{ matrix.name }}.zip" "XiangqiPx0.app"; else zip -r "XiangqiPx0-${{ matrix.name }}.zip" "XiangqiPx0"; fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: XiangqiPx0-${{ matrix.name }}
+          path: desktop/dist/XiangqiPx0-${{ matrix.name }}.zip
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Publish to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*.zip
+          body: |
+            px0 象棋桌面版(免安裝,雙擊即用):
+            - Windows：XiangqiPx0-windows.zip（DirectML GPU）
+            - macOS：XiangqiPx0-macos.zip
+            - Linux：XiangqiPx0-linux.zip（CPU）
+            首次啟動自動下載權重(weights release 的 net.onnx)。需先上傳 net.onnx 到該 release。
