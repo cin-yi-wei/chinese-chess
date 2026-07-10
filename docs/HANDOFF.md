@@ -106,7 +106,7 @@ px0 側：**33MB 網路 + 400 sims + batch=8 + 隨機開局**。
 |---|---|
 | Rust depth-2 | **8 勝 0 負（100%）** |
 | Rust depth-4 | **6 勝 0 負（100%）** |
-| Rust depth-6 | 壓制中（見 `eval_d6b.log`，乾淨環境下開局連勝） |
+| Rust depth-6 | **6 勝 0 負（100%）** |
 
 對比：使用者自己從零訓練的網路連 depth-2 都 0%。→ **px0 權重 + 自製 MCTS 完勝那條路**。
 
@@ -122,6 +122,7 @@ px0 側：**33MB 網路 + 400 sims + batch=8 + 隨機開局**。
 - `alphazero/px0_eval.py` — **核心評估器** `Px0Evaluator(onnx_path, providers)`（介面同 NNEvaluator）。
 - `alphazero/verify_px0_mapping.py` — FEN + 著法映射驗證（11993 局面 0 失敗）。
 - `alphazero/eval_px0_vs_oppd.py` — 對 Rust oppd 隨機開局勝率評測。
+- `alphazero/serve_px0.py` — **網頁對弈 GUI（自足版）**：純 Python 標準庫 HTTP 伺服器 + 內嵌單檔象棋盤 HTML，無 aiohttp/torch/npm 相依，只需 onnxruntime。人執紅、AI(px0) 執黑。伺服器維持 Board 狀態(move_stack)以提供正確 8 步歷史。用法：`PX0_ONNX=../px0/nets/net_33mb.onnx python serve_px0.py` → 開 http://127.0.0.1:3941。
 - `alphazero/mcts.py`（沿用）— PUCT MCTS，`puct_search_batched` / `visit_distribution_batched`。
 - `alphazero/xiangqi/board.py`、`encode.py`（沿用）— 象棋盤面/規則。
 - `engine/src/bin/oppd.rs`、`engine/src/search.rs`（TT）— Rust 對手守護程序 + 加速。
