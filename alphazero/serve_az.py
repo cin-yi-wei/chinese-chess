@@ -113,8 +113,11 @@ def z_select_move(dist: dict, z: float):
     if z >= 50.0:
         return items[0][0]
     s = _z01(z)  # 1=最強 0=最弱
-    center = (1.0 - s) * (k - 1)                 # 目標名次：強→0、弱→k-1
-    spread = (1.0 - s) * (k - 1) * 0.25 + 0.5    # 強端窄(穩)、弱端寬
+    # 曲線拉陡(冪次)：多數滑桿都貼近最佳步，只有低端才明顯放水。
+    # 線性會讓難度50挑中段名次，而 MCTS 訪問集中好步→中段名次=爛步→50 太弱像亂走。
+    d = 1.0 - s
+    center = (d ** 3) * (k - 1)                   # 難度100→0、50→~1/8、25→~4/9、1→最差
+    spread = (d ** 2) * (k - 1) * 0.25 + 0.5      # 同步收斂：中高段窄(穩)、低端才寬
     r = int(round(random.gauss(center, spread)))
     r = max(0, min(k - 1, r))
     return items[r][0]
