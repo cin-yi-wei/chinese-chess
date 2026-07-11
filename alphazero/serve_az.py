@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import random
 
@@ -29,7 +30,7 @@ _REPO_ALPHAZERO = os.path.dirname(os.path.abspath(__file__))
 from aiohttp import web
 
 from px0_eval import Px0Evaluator
-from mcts import puct_search_batched, visit_distribution_batched
+from mcts import puct_search_batched, visit_distribution_batched, qn_distribution_batched
 from xiangqi.board import Board, coord_to_sq, sq_to_coord, move_src, move_dst, make_move_code
 
 ONNX = os.environ.get(
@@ -54,6 +55,14 @@ CUSTOM_SIMS_MAX = int(os.environ.get("CHESS_CUSTOM_SIMS_MAX", "160"))  # z=+2（
 # 門檻 R_th 也隨 z 縮放：強端 0.10 保品質；弱端 →0 放行爛步，下限才夠弱。
 THRESHOLD_MAX = 0.10
 CUSTOM_MIN, CUSTOM_MAX = 1, 100
+
+# 自適應棋力（依實際勝率/價值選步）：對各著法的 q_root(走子方視角價值∈[-1,1]) 做
+# softmax(q/τ) 抽樣。τ=溫度旋鈕：強→小(幾乎挑勝率最高)、弱→大(分佈攤平)。
+# 好處：q 是跨局面一致的尺度(≈贏面)，棋力=願意放棄多少勝率；局面若大家差不多則弱也不亂送、
+# 若有明顯最佳步弱才會漏——級距自動反映在 q 差裡，不必人工湊名次曲線。
+TAU_MIN = float(os.environ.get("CHESS_TAU_MIN", "0.03"))  # 最強端溫度（近 argmax）
+TAU_MAX = float(os.environ.get("CHESS_TAU_MAX", "0.90"))  # 最弱端溫度（分佈攤平）
+TAU_EXP = float(os.environ.get("CHESS_TAU_EXP", "2.0"))   # 溫度隨(1-s)的冪次
 
 
 def difficulty_to_z(d: int) -> float:
@@ -123,15 +132,42 @@ def z_select_move(dist: dict, z: float):
     return items[r][0]
 
 
+def q_temperature_select(qn: dict, z: float):
+    """自適應棋力選步：qn={mv:(visits,q_root)} → softmax(q/τ(z)) 抽樣。
+
+    只在『搜尋過(visits>0)』的著法裡選(未搜尋步 q 不可靠)。τ 隨棋力：強→小、弱→大。"""
+    items = [(m, q) for m, (n, q) in qn.items() if n > 0] or \
+            [(m, q) for m, (n, q) in qn.items()]
+    if not items:
+        return None
+    if len(items) == 1:
+        return items[0][0]
+    if z >= 50.0:
+        return max(items, key=lambda mq: mq[1])[0]
+    s = _z01(z)  # 1=最強 0=最弱
+    tau = TAU_MIN + (TAU_MAX - TAU_MIN) * (1.0 - s) ** TAU_EXP
+    q_max = max(q for _, q in items)
+    weights = [math.exp((q - q_max) / tau) for _, q in items]
+    total = sum(weights)
+    if not (total > 0.0):
+        return max(items, key=lambda mq: mq[1])[0]
+    pick = random.random() * total
+    for (m, _), wt in zip(items, weights):
+        pick -= wt
+        if pick <= 0.0:
+            return m
+    return items[-1][0]
+
+
 _evaluator = Px0Evaluator(ONNX)
 
 
 def _pick_move(board: Board, sims: int, z):
-    """跑 MCTS 選一步。z=None → 取最高訪問（預設難度）；z 有值 → 線性棋力抽樣（自訂）。"""
+    """跑 MCTS 選一步。z=None → 取最高訪問（預設難度）；z 有值 → 自適應棋力(勝率溫度)選步。"""
     if z is None:
         return puct_search_batched(board, _evaluator, sims, BATCH, 1.5)
-    dist = visit_distribution_batched(board, _evaluator, sims, BATCH, 1.5)
-    return z_select_move(dist, z)
+    qn = qn_distribution_batched(board, _evaluator, sims, BATCH, 1.5)
+    return q_temperature_select(qn, z)
 
 
 def state_msg(board: Board, ai_move=None, game_over_override=None) -> dict:

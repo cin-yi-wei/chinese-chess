@@ -204,6 +204,19 @@ def visit_distribution_batched(root_board: Board, batch_evaluator, sims: int = 4
     return {mv: ch.n for mv, ch in root.children.items()}
 
 
+def qn_distribution_batched(root_board: Board, batch_evaluator, sims: int = 400,
+                            batch_size: int = 32, c_puct: float = 1.5):
+    """回傳 root 各著法 {mv: (visits, q_root)}。
+
+    q_root = 該著法以「走子方視角」的平均價值 ∈ [-1,1]（越大對走子方越好）。
+    子節點 q() 是對手視角，故取負號。供自適應棋力(依實際勝率/價值選步)使用。
+    """
+    root = _run_batched(root_board, batch_evaluator, sims, batch_size, c_puct)
+    if root is None:
+        return {}
+    return {mv: (ch.n, -ch.q()) for mv, ch in root.children.items()}
+
+
 def visit_distribution(board: Board, evaluator=material_evaluator, sims: int = 400,
                        c_puct: float = 1.5) -> dict[int, int]:
     """回傳根節點各著法的訪問次數（供自我對弈產生訓練用的 policy 目標）。"""
