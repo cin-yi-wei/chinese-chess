@@ -271,6 +271,7 @@ class BoardScene extends Phaser.Scene {
         this.lastAi = null;
         this.setStatus('AI 思考中…');
         this.updateNav();
+        this.drawLastMove(); // 立刻標出你這一步，不必等 AI 回手
         // 樂觀動畫：先把自己的子移過去（server 已驗證為合法目標）
         this.animateMove(from.x, from.y, x, y, null);
         this.send({ type: 'move', from: [from.x, from.y], to: [x, y] });
