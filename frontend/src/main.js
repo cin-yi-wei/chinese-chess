@@ -30,10 +30,13 @@ class BoardScene extends Phaser.Scene {
     this.history = []; // 每個權威盤面快照 {fen,redToMove,legal,gameOver,inCheck}
     this.viewPtr = -1; // 目前顯示的是 history 第幾筆（<最後一筆＝回顧模式）
     this.intent = 'new_game'; // 上一個送出的請求類型，決定回覆怎麼併入 history
+    this.lastHuman = null; // 你最近一步 [fx,fy,tx,ty]
+    this.lastAi = null; // AI 最近一步 [fx,fy,tx,ty]
   }
 
   create() {
     this.drawBoard();
+    this.lastMoveGfx = this.add.graphics().setDepth(4); // 最近著法方框（在棋子下方）
     this.markerGfx = this.add.graphics().setDepth(5);
     this.connect();
     this.input.on('pointerdown', (p) => this.onClick(p));
@@ -69,6 +72,8 @@ class BoardScene extends Phaser.Scene {
           : 'medium';
     this.busy = false;
     this.intent = 'new_game';
+    this.lastHuman = null;
+    this.lastAi = null;
     this.send({ type: 'new_game', difficulty });
   }
 
@@ -174,15 +179,21 @@ class BoardScene extends Phaser.Scene {
     if (intent === 'new_game') {
       this.history = [snap];
       this.viewPtr = 0;
+      this.lastHuman = null;
+      this.lastAi = null;
     } else if (intent === 'undo') {
       if (this.history.length > 1) this.history.pop(); // 丟掉被悔掉的那一組
       this.history[this.history.length - 1] = snap;
       this.viewPtr = this.history.length - 1;
+      this.lastHuman = null; // 悔棋後上一步標記已失效
+      this.lastAi = null;
     } else if (intent === 'resign') {
       this.history[this.history.length - 1] = snap; // 盤面不變，只是標記終局
       this.viewPtr = this.history.length - 1;
     } else {
-      this.history.push(snap); // 一般走子
+      // 一般走子
+      if (msg.aiMove) this.lastAi = msg.aiMove.slice(); // 記住 AI 這一步
+      this.history.push(snap);
       this.viewPtr = this.history.length - 1;
     }
 
@@ -256,6 +267,8 @@ class BoardScene extends Phaser.Scene {
         this.markerGfx.clear();
         this.busy = true;
         this.intent = 'move';
+        this.lastHuman = [from.x, from.y, x, y]; // 記住你這一步
+        this.lastAi = null;
         this.setStatus('AI 思考中…');
         this.updateNav();
         // 樂觀動畫：先把自己的子移過去（server 已驗證為合法目標）
@@ -354,7 +367,31 @@ class BoardScene extends Phaser.Scene {
         if (ch) this.sprites.set(keyOf(x, y), this.makePiece(x, y, ch));
       }
     }
+    this.drawLastMove();
     this.drawMarkers();
+  }
+
+  // 標出最近著法：你的一步（綠框）+ AI 的一步（藍框），from 虛淡、to 實亮。
+  drawLastMove() {
+    const g = this.lastMoveGfx;
+    if (!g) return;
+    g.clear();
+    if (!this.atLatest()) return; // 回顧模式不畫（避免與歷史盤面混淆）
+    const box = (x, y, color, alpha) => {
+      const s = R + 6;
+      g.lineStyle(3, color, alpha);
+      g.strokeRoundedRect(px(x) - s, py(y) - s, s * 2, s * 2, 6);
+    };
+    if (this.lastHuman) {
+      const [a, b, c, d] = this.lastHuman;
+      box(a, b, 0x2fbf4f, 0.5);
+      box(c, d, 0x2fbf4f, 1);
+    }
+    if (this.lastAi) {
+      const [a, b, c, d] = this.lastAi;
+      box(a, b, 0x4d84c0, 0.5);
+      box(c, d, 0x4d84c0, 1);
+    }
   }
 
   drawMarkers() {
