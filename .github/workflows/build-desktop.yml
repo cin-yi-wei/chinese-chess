@@ -5,7 +5,7 @@ name: build-desktop
 # 權重不打包，執行檔首次啟動從 Release 的 weights 附件自動下載。
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*", "!*-px0"]   # 排除 px0 tag（那是 build-desktop-px0 的）
   workflow_dispatch:
 
 permissions:
