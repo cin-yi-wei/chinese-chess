@@ -30,7 +30,7 @@ else:
 
 sys.path.insert(0, _AZ)
 os.environ["PX0_ONNX"] = _ONNX
-os.environ.setdefault("CHESS_SIMS", "400")
+os.environ.setdefault("CHESS_DIFFICULTY", "medium")  # 前端可切 easy/medium/hard/max
 os.environ.setdefault("CHESS_BATCH", "8")
 # 權重（.onnx）下載來源：使用者需在 Release 上傳 net.onnx 附件（換強腦只要重傳）。
 os.environ.setdefault(
