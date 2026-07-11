@@ -1,13 +1,14 @@
-"""中國象棋 px0 桌面版（Windows / macOS / Linux）。
+"""中國象棋 px0 桌面版（Windows / macOS / Linux）—— 包「網頁版」。
 
-用 px0 強權重（經 ONNX）+ 自製 PUCT MCTS，跑本機對弈服務（serve_px0，純 Python + onnxruntime，
-零 C++ 相依），pywebview 開視窗。相比舊 torch 版：無 torch/CUDA（打包從 ~2.4GB 降到數百 MB）、
-無需前端建置（serve_px0 內嵌棋盤 HTML）、三平台皆可上 Release。
+用 px0 強權重（經 ONNX）+ 自製 PUCT MCTS，跑線上同一套網頁對弈服務 serve_az.py
+（aiohttp WebSocket + Phaser 前端 frontend/dist，4 難度 + 交大 z-index 1~100 拉霸），
+pywebview 開視窗載入。零 torch、GPU 走 onnxruntime(-directml)。權重不打包，首次啟動下載。
 
-執行（開發）：
-    pip install pywebview onnxruntime numpy   # Windows GPU 用 onnxruntime-directml
+執行（開發，需先 build 前端 → frontend/dist）：
+    pip install pywebview aiohttp onnxruntime numpy
+    (cd ../frontend && npm install && npm run build)
     PX0_ONNX=../px0/nets/net_33mb.onnx python app_px0.py
-打包見 .github/workflows/build-desktop-px0.yml（CI 三平台）。權重不打包，首次啟動從 Release 下載。
+打包見 .github/workflows/build-desktop-px0.yml（CI：node build 前端 + PyInstaller 三平台）。
 """
 
 from __future__ import annotations
@@ -17,22 +18,23 @@ import sys
 import threading
 import time
 
-# 凍結後（PyInstaller）用解壓目錄；開發時用 repo 相對路徑。
 if getattr(sys, "frozen", False):
     _BASE = sys._MEIPASS  # type: ignore[attr-defined]
     _AZ = os.path.join(_BASE, "alphazero")
+    _STATIC = os.path.join(_BASE, "frontend", "dist")
     _ONNX = os.path.join(os.path.expanduser("~"), ".xiangqi-px0", "net.onnx")
 else:
     _HERE = os.path.dirname(os.path.abspath(__file__))
     _AZ = os.path.join(os.path.dirname(_HERE), "alphazero")
+    _STATIC = os.path.join(os.path.dirname(_HERE), "frontend", "dist")
     _ONNX = os.environ.get(
         "PX0_ONNX", os.path.join(os.path.dirname(_HERE), "px0", "nets", "net_33mb.onnx"))
 
 sys.path.insert(0, _AZ)
-os.environ["PX0_ONNX"] = _ONNX
-os.environ.setdefault("CHESS_DIFFICULTY", "medium")  # 前端可切 easy/medium/hard/max
+# serve_az 在 import 時就建 Px0Evaluator + 讀這些 env，故先設好
+os.environ["CHESS_ONNX"] = _ONNX
+os.environ["CHESS_STATIC"] = _STATIC
 os.environ.setdefault("CHESS_BATCH", "8")
-# 權重（.onnx）下載來源：使用者需在 Release 上傳 net.onnx 附件（換強腦只要重傳）。
 os.environ.setdefault(
     "PX0_ONNX_URL",
     "https://github.com/cin-yi-wei/chinese-chess/releases/download/weights/net.onnx",
@@ -51,12 +53,22 @@ def ensure_onnx() -> None:
 
 
 def _run_server() -> None:
-    import serve_px0
-    serve_px0.main()   # ThreadingHTTPServer.serve_forever（阻塞→在此執行緒）
+    # aiohttp 的 run_app 需主執行緒；背景執行改用 AppRunner + 自建事件迴圈。
+    import asyncio
+    from aiohttp import web
+    import serve_az   # import 時載入 onnx（吃 CHESS_ONNX）
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    runner = web.AppRunner(serve_az.make_app())
+    loop.run_until_complete(runner.setup())
+    site = web.TCPSite(runner, "127.0.0.1", PORT)
+    loop.run_until_complete(site.start())
+    loop.run_forever()
 
 
 def main() -> None:
-    ensure_onnx()      # serve_px0 匯入時會建 Px0Evaluator（載入 onnx）
+    ensure_onnx()
     threading.Thread(target=_run_server, daemon=True).start()
 
     import urllib.request
@@ -70,7 +82,7 @@ def main() -> None:
     url = f"http://127.0.0.1:{PORT}/"
     try:
         import webview
-        webview.create_window("中國象棋 · px0", url, width=520, height=620)
+        webview.create_window("中國象棋 · px0", url, width=640, height=760)
         webview.start()
     except Exception as e:
         print(f"pywebview 開視窗失敗（{e}），改用系統瀏覽器：{url}")

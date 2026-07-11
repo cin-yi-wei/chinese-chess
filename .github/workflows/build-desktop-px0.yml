@@ -33,22 +33,33 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Build frontend (Phaser)
+        working-directory: frontend
+        run: |
+          npm install
+          npm run build
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller pywebview numpy ${{ matrix.ort }}
+          pip install pyinstaller pywebview aiohttp numpy ${{ matrix.ort }}
 
       - name: PyInstaller
         working-directory: desktop
         run: >
           pyinstaller --noconfirm --windowed --name XiangqiPx0
           --paths ../alphazero
-          --hidden-import serve_px0 --hidden-import px0_eval --hidden-import px0_encode
+          --hidden-import serve_az --hidden-import px0_eval --hidden-import px0_encode
           --hidden-import mcts --hidden-import xiangqi.board --hidden-import xiangqi.encode
-          --hidden-import onnxruntime --hidden-import numpy
+          --hidden-import onnxruntime --hidden-import numpy --hidden-import aiohttp
+          --add-data "../frontend/dist${{ matrix.sep }}frontend/dist"
           --add-data "../alphazero/px0_movestrs.json${{ matrix.sep }}alphazero"
           app_px0.py
 
