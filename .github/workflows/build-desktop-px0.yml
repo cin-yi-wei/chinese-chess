@@ -1,12 +1,25 @@
 name: build-desktop-px0
 
-# px0(ONNX)桌面版：Windows / macOS / Linux 三平台各用 PyInstaller 打包。
-# 相比 torch 版：無 torch/CUDA(數百 MB 而非 2.4GB)、無需前端建置(serve_px0 內嵌棋盤 HTML)、
-# 三平台皆可上 Release、且多了 Linux。權重(.onnx)不打包,首次啟動從 Release 的 weights 附件下載。
-# 觸發:打 tag(v*-px0)或手動。
+# px0(ONNX)桌面版：Windows / macOS / Linux 三平台各用 PyInstaller 打包,包線上網頁版
+# (serve_az + Phaser 前端)。權重(.onnx)不打包,首次啟動從 weights release 下載。
+#
+# 自動觸發:push 到 dev 且動到網頁/評估器/桌面殼相關檔 → 自動重建三平台 →
+#   發到固定的「桌面版(最新)」release(tag=desktop-latest,下載連結不變、永遠最新)。
+#   → 網頁怎麼改,桌面版自動同步,不用手動。也可手動 workflow_dispatch。
 on:
   push:
-    tags: ["*-px0"]
+    branches: [dev]
+    paths:
+      - "alphazero/serve_az.py"
+      - "alphazero/serve_px0.py"
+      - "alphazero/px0_eval.py"
+      - "alphazero/px0_encode.py"
+      - "alphazero/px0_movestrs.json"
+      - "alphazero/mcts.py"
+      - "alphazero/xiangqi/**"
+      - "frontend/**"
+      - "desktop/app_px0.py"
+      - ".github/workflows/build-desktop-px0.yml"
   workflow_dispatch:
 
 permissions:
@@ -83,19 +96,21 @@ jobs:
 
   release:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-      - name: Publish to Release
+      # 固定 tag=desktop-latest 的滾動 release:每次自動更新附件,下載連結永遠不變。
+      - name: Publish rolling latest release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: desktop-latest
+          name: 桌面版(最新)
           files: artifacts/**/*.zip
           body: |
-            px0 象棋桌面版(免安裝,雙擊即用):
+            px0 象棋桌面版(免安裝,雙擊即用)——隨 dev 網頁更新自動重建、永遠最新。
             - Windows：XiangqiPx0-windows.zip（DirectML GPU）
             - macOS：XiangqiPx0-macos.zip
             - Linux：XiangqiPx0-linux.zip（CPU）
-            首次啟動自動下載權重(weights release 的 net.onnx)。需先上傳 net.onnx 到該 release。
+            首次啟動自動下載權重(weights release 的 net.onnx)。
