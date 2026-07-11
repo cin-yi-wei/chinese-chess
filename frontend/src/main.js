@@ -53,28 +53,36 @@ class BoardScene extends Phaser.Scene {
     const diff = document.getElementById('difficulty');
     const diffVal = document.getElementById('difficulty-val');
     if (diff && diffVal) diff.oninput = () => (diffVal.textContent = diff.value);
+    const sims = document.getElementById('sims');
+    const simsVal = document.getElementById('sims-val');
+    if (sims && simsVal) sims.oninput = () => (simsVal.textContent = sims.value);
 
-    // 模式切換：選「自訂」才顯示 1~100 滑桿
+    // 模式切換：選「自訂」才顯示 棋力 + 模擬數 兩支滑桿
     const mode = document.getElementById('mode');
     const wrap = document.getElementById('custom-wrap');
     if (mode && wrap) mode.onchange = () => (wrap.style.display = mode.value === 'custom' ? 'inline-flex' : 'none');
   }
 
-  newGame() {
+  // 依目前選單組出難度 payload：自訂→{difficulty:1~100, sims}；預設→{difficulty:字串}
+  difficultyPayload() {
     const mode = document.getElementById('mode');
-    const slider = document.getElementById('difficulty');
-    // 自訂 → 送 1~100 數字；預設模式 → 送字串
-    const difficulty =
-      mode && mode.value === 'custom'
-        ? (slider ? parseInt(slider.value, 10) : 50)
-        : mode
-          ? mode.value
-          : 'medium';
+    if (mode && mode.value === 'custom') {
+      const slider = document.getElementById('difficulty');
+      const sims = document.getElementById('sims');
+      return {
+        difficulty: slider ? parseInt(slider.value, 10) : 50,
+        sims: sims ? parseInt(sims.value, 10) : 100,
+      };
+    }
+    return { difficulty: mode ? mode.value : 'medium' };
+  }
+
+  newGame() {
     this.busy = false;
     this.intent = 'new_game';
     this.lastHuman = null;
     this.lastAi = null;
-    this.send({ type: 'new_game', difficulty });
+    this.send({ type: 'new_game', ...this.difficultyPayload() });
   }
 
   atLatest() {
@@ -274,7 +282,8 @@ class BoardScene extends Phaser.Scene {
         this.drawLastMove(); // 立刻標出你這一步，不必等 AI 回手
         // 樂觀動畫：先把自己的子移過去（server 已驗證為合法目標）
         this.animateMove(from.x, from.y, x, y, null);
-        this.send({ type: 'move', from: [from.x, from.y], to: [x, y] });
+        // 每步都帶當前難度/sims → 中途調拉霸下一步立即生效
+        this.send({ type: 'move', from: [from.x, from.y], to: [x, y], ...this.difficultyPayload() });
         return;
       }
     }

@@ -75,14 +75,21 @@ def rth_for_z(z: float) -> float:
     return THRESHOLD_MAX * _z01(z)
 
 
-def resolve_difficulty(difficulty):
+SIMS_HARD_MIN, SIMS_HARD_MAX = 8, 400  # 自訂 sims 拉霸的允許範圍
+
+
+def resolve_difficulty(difficulty, sims_override=None):
     """回傳 (sims, z)：z=None 表示預設模式（取最高訪問）；z 有值表示自訂線性棋力。
-    自訂模式 sims 依 z 縮放（弱端少、強端多）。"""
+    自訂模式：z 由 difficulty(1~100) 決定；sims 若前端有給(獨立拉霸)就用它，否則依 z 縮放。"""
     if isinstance(difficulty, bool):  # 防呆：bool 是 int 子類
         return DEFAULT_SIMS, None
     if isinstance(difficulty, (int, float)):
         z = difficulty_to_z(int(difficulty))
-        return sims_for_z(z), z
+        if isinstance(sims_override, (int, float)) and not isinstance(sims_override, bool):
+            sims = max(SIMS_HARD_MIN, min(SIMS_HARD_MAX, int(sims_override)))
+        else:
+            sims = sims_for_z(z)
+        return sims, z
     if isinstance(difficulty, str) and difficulty in PRESET_SIMS:
         return PRESET_SIMS[difficulty], None
     return DEFAULT_SIMS, None
@@ -153,7 +160,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
         t = cmd.get("type")
         if t == "new_game":
             board = Board.start()
-            sims, z = resolve_difficulty(cmd.get("difficulty"))
+            sims, z = resolve_difficulty(cmd.get("difficulty"), cmd.get("sims"))
             await ws.send_json(state_msg(board))
         elif t == "resign":
             # 認輸：紅（人）投降，黑勝。盤面不動，只回覆終局。
@@ -168,6 +175,9 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                 board.undo_make_move()
             await ws.send_json(state_msg(board))
         elif t == "move":
+            # 前端每步都帶當前難度/sims → 中途調拉霸『下一步立即生效』，不必重開局
+            if "difficulty" in cmd:
+                sims, z = resolve_difficulty(cmd.get("difficulty"), cmd.get("sims"))
             fr, to = cmd.get("from"), cmd.get("to")
             mv = make_move_code(coord_to_sq(fr[0], fr[1]), coord_to_sq(to[0], to[1]))
             if mv not in board.legal_moves():

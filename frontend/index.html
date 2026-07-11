@@ -47,11 +47,12 @@
         cursor: pointer;
       }
       #mode:hover { background: #3a302a; }
-      #custom-wrap { display: inline-flex; align-items: center; gap: 8px; }
-      #difficulty { cursor: pointer; vertical-align: middle; width: 140px; }
-      #difficulty-val {
+      #custom-wrap { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      #custom-wrap .slabel { font-size: 13px; opacity: .8; }
+      #difficulty, #sims { cursor: pointer; vertical-align: middle; width: 120px; }
+      #difficulty-val, #sims-val {
         display: inline-block;
-        min-width: 2.2em;
+        min-width: 2.6em;
         text-align: center;
         font-variant-numeric: tabular-nums;
         font-weight: bold;
@@ -93,8 +94,12 @@
         <option value="custom">自訂</option>
       </select>
       <span id="custom-wrap" style="display: none">
+        <span class="slabel">棋力</span>
         <input id="difficulty" type="range" min="1" max="100" value="50" />
         <span id="difficulty-val">50</span>
+        <span class="slabel">模擬數</span>
+        <input id="sims" type="range" min="8" max="400" step="4" value="100" />
+        <span id="sims-val">100</span>
       </span>
       <button id="new-game">重新開局</button>
       <button id="undo">悔棋</button>
