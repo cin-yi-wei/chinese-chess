@@ -96,26 +96,28 @@ def resolve_difficulty(difficulty, sims_override=None):
 
 
 def z_select_move(dist: dict, z: float):
-    """線性棋力選步：dist={move:N_i} → 濾門檻(隨 z) → π_i ∝ N_i^z 加權抽樣。"""
+    """線性棋力選步（方案 A：挑第 N 好步）。
+
+    把『搜尋過的著法』依訪問數由好到壞排序，依棋力挑排名第 r 名：
+      強(z=+2)→ r≈0（最佳步）；弱(z=-2)→ r≈最後（搜尋過的最差步）。
+    r 以常態分佈在目標名次附近取樣(有自然變化)，且強端 spread 收很小(穩定下好棋)、
+    弱端 spread 大。全程都是網路搜尋過的合理著法 → 弱是『有邏輯的臭棋』而非亂數，
+    且名次給了平滑的強弱梯度。"""
     if not dist:
         return None
-    n_max = max(dist.values())
-    if n_max <= 0:
-        return next(iter(dist))
-    floor = n_max * rth_for_z(z)
-    pool = [(m, n) for m, n in dist.items() if n >= floor and n > 0] or list(dist.items())
+    items = [(m, n) for m, n in dist.items() if n > 0] or list(dist.items())
+    items.sort(key=lambda mn: mn[1], reverse=True)  # 好 → 壞
+    k = len(items)
+    if k <= 1:
+        return items[0][0]
     if z >= 50.0:
-        return max(pool, key=lambda mn: mn[1])[0]
-    weights = [n ** z for _, n in pool]
-    total = sum(weights)
-    if not (total > 0.0):
-        return max(pool, key=lambda mn: mn[1])[0]
-    pick = random.random() * total
-    for (m, _), w in zip(pool, weights):
-        pick -= w
-        if pick <= 0.0:
-            return m
-    return pool[-1][0]
+        return items[0][0]
+    s = _z01(z)  # 1=最強 0=最弱
+    center = (1.0 - s) * (k - 1)                 # 目標名次：強→0、弱→k-1
+    spread = (1.0 - s) * (k - 1) * 0.25 + 0.5    # 強端窄(穩)、弱端寬
+    r = int(round(random.gauss(center, spread)))
+    r = max(0, min(k - 1, r))
+    return items[r][0]
 
 
 _evaluator = Px0Evaluator(ONNX)
