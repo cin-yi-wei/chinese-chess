@@ -32,6 +32,55 @@ class BoardScene extends Phaser.Scene {
     this.intent = 'new_game'; // 上一個送出的請求類型，決定回覆怎麼併入 history
     this.lastHuman = null; // 你最近一步 [fx,fy,tx,ty]
     this.lastAi = null; // AI 最近一步 [fx,fy,tx,ty]
+    this.moves = []; // 整局每一 ply [fx,fy,tx,ty]（含人與 AI），用於斷線重連重建
+    this._saved = null; // 重連時暫存 localStorage 讀到的存檔
+    this.STORE = 'chess-az-game'; // localStorage key
+  }
+
+  // ---- 斷線重連存檔（手機切走 WS 會斷，回來重建整局） ----
+  saveGame() {
+    try {
+      localStorage.setItem(this.STORE, JSON.stringify({
+        moves: this.moves,
+        hist: this.history,
+        lh: this.lastHuman,
+        la: this.lastAi,
+        pay: this.difficultyPayload(),
+      }));
+    } catch (e) { /* localStorage 不可用就算了 */ }
+  }
+
+  loadGame() {
+    try {
+      const raw = localStorage.getItem(this.STORE);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  }
+
+  clearGame() {
+    try { localStorage.removeItem(this.STORE); } catch (e) { /* ignore */ }
+  }
+
+  // 把存檔的難度設定還原到 UI 控制項（否則下一步會被 UI 現值覆蓋）
+  applyPayloadToUI(pay) {
+    if (!pay) return;
+    const mode = document.getElementById('mode');
+    const wrap = document.getElementById('custom-wrap');
+    if (typeof pay.difficulty === 'number') {
+      if (mode) mode.value = 'custom';
+      if (wrap) wrap.style.display = 'inline-flex';
+      const d = document.getElementById('difficulty');
+      const dv = document.getElementById('difficulty-val');
+      const sm = document.getElementById('sims');
+      const smv = document.getElementById('sims-val');
+      if (d) d.value = pay.difficulty;
+      if (dv) dv.textContent = pay.difficulty;
+      if (sm && pay.sims != null) sm.value = pay.sims;
+      if (smv && pay.sims != null) smv.textContent = pay.sims;
+    } else if (mode && typeof pay.difficulty === 'string') {
+      mode.value = pay.difficulty;
+      if (wrap) wrap.style.display = 'none';
+    }
   }
 
   create() {
@@ -49,6 +98,14 @@ class BoardScene extends Phaser.Scene {
     if (resignBtn) resignBtn.onclick = () => this.doResign();
     if (prevBtn) prevBtn.onclick = () => this.viewStep(-1);
     if (nextBtn) nextBtn.onclick = () => this.viewStep(1);
+
+    // 手機切回畫面時 WS 常已斷 → 自動重連並從存檔重建整局
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && (!this.ws || this.ws.readyState > 1)) this.connect();
+    });
+    window.addEventListener('online', () => {
+      if (!this.ws || this.ws.readyState > 1) this.connect();
+    });
 
     const diff = document.getElementById('difficulty');
     const diffVal = document.getElementById('difficulty-val');
@@ -82,6 +139,8 @@ class BoardScene extends Phaser.Scene {
     this.intent = 'new_game';
     this.lastHuman = null;
     this.lastAi = null;
+    this.moves = [];
+    this.clearGame();
     this.send({ type: 'new_game', ...this.difficultyPayload() });
   }
 
@@ -155,7 +214,16 @@ class BoardScene extends Phaser.Scene {
     this.ws = new WebSocket(`${proto}://${location.host}/ws`);
     this.ws.onopen = () => {
       this.setStatus('已連線');
-      this.newGame();
+      const saved = this.loadGame();
+      if (saved && Array.isArray(saved.moves) && saved.moves.length > 0) {
+        // 有未結束的存檔 → 重建整局，不要開新局
+        this._saved = saved;
+        this.intent = 'restore';
+        this.applyPayloadToUI(saved.pay);
+        this.send({ type: 'restore', moves: saved.moves, ...(saved.pay || {}) });
+      } else {
+        this.newGame();
+      }
     };
     this.ws.onclose = () => this.setStatus('連線中斷，重整頁面再試');
     this.ws.onmessage = (e) => this.onMessage(JSON.parse(e.data));
@@ -189,10 +257,26 @@ class BoardScene extends Phaser.Scene {
       this.viewPtr = 0;
       this.lastHuman = null;
       this.lastAi = null;
+      this.moves = [];
+    } else if (intent === 'restore') {
+      // 重連重建：優先用存檔的歷史(含回顧棋譜)；伺服器回的 snap 是權威現況
+      const s = this._saved;
+      if (s && Array.isArray(s.hist) && s.hist.length) {
+        this.history = s.hist;
+        this.moves = Array.isArray(s.moves) ? s.moves : [];
+        this.lastHuman = s.lh || null;
+        this.lastAi = s.la || null;
+      } else {
+        this.history = [snap];
+        this.moves = [];
+      }
+      this.viewPtr = this.history.length - 1;
+      this._saved = null;
     } else if (intent === 'undo') {
       if (this.history.length > 1) this.history.pop(); // 丟掉被悔掉的那一組
       this.history[this.history.length - 1] = snap;
       this.viewPtr = this.history.length - 1;
+      this.moves = this.moves.slice(0, Math.max(0, this.moves.length - 2)); // 收回人+AI 兩 ply
       this.lastHuman = null; // 悔棋後上一步標記已失效
       this.lastAi = null;
     } else if (intent === 'resign') {
@@ -200,7 +284,10 @@ class BoardScene extends Phaser.Scene {
       this.viewPtr = this.history.length - 1;
     } else {
       // 一般走子
-      if (msg.aiMove) this.lastAi = msg.aiMove.slice(); // 記住 AI 這一步
+      if (msg.aiMove) {
+        this.lastAi = msg.aiMove.slice(); // 記住 AI 這一步
+        this.moves.push(msg.aiMove.slice()); // 記入整局著法（重連用）
+      }
       this.history.push(snap);
       this.viewPtr = this.history.length - 1;
     }
@@ -215,6 +302,7 @@ class BoardScene extends Phaser.Scene {
       this.busy = false;
       this.updateStatus(snap);
       this.updateNav();
+      this.saveGame(); // 每次盤面更新都存檔（斷線重連用）
     };
 
     if (msg.aiMove && intent === 'move') {
@@ -277,6 +365,8 @@ class BoardScene extends Phaser.Scene {
         this.intent = 'move';
         this.lastHuman = [from.x, from.y, x, y]; // 記住你這一步
         this.lastAi = null;
+        this.moves.push([from.x, from.y, x, y]); // 記入整局著法（重連用）
+        this.saveGame();
         this.setStatus('AI 思考中…');
         this.updateNav();
         this.drawLastMove(); // 立刻標出你這一步，不必等 AI 回手

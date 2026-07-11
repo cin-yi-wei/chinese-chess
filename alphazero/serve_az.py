@@ -162,6 +162,20 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
             board = Board.start()
             sims, z = resolve_difficulty(cmd.get("difficulty"), cmd.get("sims"))
             await ws.send_json(state_msg(board))
+        elif t == "restore":
+            # 斷線重連：用前端保存的整局著法(每 ply [fx,fy,tx,ty])重放，重建盤面。
+            board = Board.start()
+            sims, z = resolve_difficulty(cmd.get("difficulty"), cmd.get("sims"))
+            for ply in cmd.get("moves") or []:
+                try:
+                    mv = make_move_code(coord_to_sq(ply[0], ply[1]), coord_to_sq(ply[2], ply[3]))
+                except (TypeError, IndexError):
+                    break
+                if mv in board.legal_moves():
+                    board.make_move(mv)
+                else:
+                    break  # 資料不一致就停在重建到的位置
+            await ws.send_json(state_msg(board))
         elif t == "resign":
             # 認輸：紅（人）投降，黑勝。盤面不動，只回覆終局。
             await ws.send_json(state_msg(board, game_over_override="black"))
