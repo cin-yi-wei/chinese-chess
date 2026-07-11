@@ -210,6 +210,9 @@ class BoardScene extends Phaser.Scene {
 
   // ---- WebSocket ----
   connect() {
+    // 已在連線/已連上就不重複開
+    if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) return;
+    if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     this.ws = new WebSocket(`${proto}://${location.host}/ws`);
     this.ws.onopen = () => {
@@ -225,7 +228,14 @@ class BoardScene extends Phaser.Scene {
         this.newGame();
       }
     };
-    this.ws.onclose = () => this.setStatus('連線中斷，重整頁面再試');
+    this.ws.onclose = () => {
+      this.setStatus('連線中斷，自動重連中…');
+      // 自動重連（伺服器重啟/網路波動時，不必手動重整）；重連後會自動 restore 整局
+      if (!this._reconnectTimer) {
+        this._reconnectTimer = setTimeout(() => { this._reconnectTimer = null; this.connect(); }, 2000);
+      }
+    };
+    this.ws.onerror = () => { try { this.ws.close(); } catch (e) { /* ignore */ } };
     this.ws.onmessage = (e) => this.onMessage(JSON.parse(e.data));
   }
 
