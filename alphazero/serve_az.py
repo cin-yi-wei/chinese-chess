@@ -95,47 +95,27 @@ def resolve_difficulty(difficulty, sims_override=None):
     return DEFAULT_SIMS, None
 
 
-def z_select_move(dist: dict, z: float, legal: list):
-    """線性棋力選步（NN 版）。
-
-    純論文 π∝N^z 在強策略網路下弱不下來：因為爛步根本不會被搜到(訪問=0)、
-    不在候選內，z 再負也只在『好步』裡挑。故改成『搜尋分佈』與『全合法均勻分佈』
-    的混合：weakness w = 1-z01(z)（z=+2→0 全靠搜尋=最強；z=-2→1 全均勻=真的弱、
-    會送子）。強端仍用 rth 過濾保品質。"""
-    if not legal:
-        legal = [m for m, n in (dist or {}).items()]
-    if not legal:
+def z_select_move(dist: dict, z: float):
+    """線性棋力選步：dist={move:N_i} → 濾門檻(隨 z) → π_i ∝ N_i^z 加權抽樣。"""
+    if not dist:
         return None
-    w = 1.0 - _z01(z)  # 0(最強) .. 1(最弱)
-
-    # 搜尋分佈 p_search（僅在有訪問的步上）
-    p_search = {}
-    if dist:
-        n_max = max(dist.values(), default=0)
-        if n_max > 0:
-            floor = n_max * rth_for_z(z)
-            pool = {m: n for m, n in dist.items() if n >= floor and n > 0} \
-                or {m: n for m, n in dist.items() if n > 0}
-            if z >= 50.0:
-                bm = max(pool, key=pool.get)
-                p_search = {bm: 1.0}
-            else:
-                wts = {m: n ** z for m, n in pool.items()}
-                tot = sum(wts.values())
-                if tot > 0:
-                    p_search = {m: v / tot for m, v in wts.items()}
-
-    u = 1.0 / len(legal)  # 均勻分佈
-    probs = [(1.0 - w) * p_search.get(m, 0.0) + w * u for m in legal]
-    total = sum(probs)
+    n_max = max(dist.values())
+    if n_max <= 0:
+        return next(iter(dist))
+    floor = n_max * rth_for_z(z)
+    pool = [(m, n) for m, n in dist.items() if n >= floor and n > 0] or list(dist.items())
+    if z >= 50.0:
+        return max(pool, key=lambda mn: mn[1])[0]
+    weights = [n ** z for _, n in pool]
+    total = sum(weights)
     if not (total > 0.0):
-        return legal[0]
+        return max(pool, key=lambda mn: mn[1])[0]
     pick = random.random() * total
-    for m, pr in zip(legal, probs):
-        pick -= pr
+    for (m, _), w in zip(pool, weights):
+        pick -= w
         if pick <= 0.0:
             return m
-    return legal[-1]
+    return pool[-1][0]
 
 
 _evaluator = Px0Evaluator(ONNX)
@@ -146,7 +126,7 @@ def _pick_move(board: Board, sims: int, z):
     if z is None:
         return puct_search_batched(board, _evaluator, sims, BATCH, 1.5)
     dist = visit_distribution_batched(board, _evaluator, sims, BATCH, 1.5)
-    return z_select_move(dist, z, list(board.legal_moves()))
+    return z_select_move(dist, z)
 
 
 def state_msg(board: Board, ai_move=None, game_over_override=None) -> dict:
