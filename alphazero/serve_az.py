@@ -104,17 +104,17 @@ def _pick_move(board: Board, sims: int, z):
     return z_select_move(dist, z)
 
 
-def state_msg(board: Board, ai_move=None) -> dict:
+def state_msg(board: Board, ai_move=None, game_over_override=None) -> dict:
     legal = board.legal_moves()
-    game_over = None
-    if not legal:
+    game_over = game_over_override
+    if game_over is None and not legal:
         game_over = "black" if board.red_to_move else "red"
     return {
         "type": "state",
         "fen": board.to_fen(),
         "redToMove": board.red_to_move,
         "inCheck": board.checked(),
-        "legal": [[*sq_to_coord(move_src(m)), *sq_to_coord(move_dst(m))] for m in legal],
+        "legal": [] if game_over else [[*sq_to_coord(move_src(m)), *sq_to_coord(move_dst(m))] for m in legal],
         "aiMove": ai_move,
         "gameOver": game_over,
     }
@@ -136,6 +136,18 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
         if t == "new_game":
             board = Board.start()
             sims, z = resolve_difficulty(cmd.get("difficulty"))
+            await ws.send_json(state_msg(board))
+        elif t == "resign":
+            # 認輸：紅（人）投降，黑勝。盤面不動，只回覆終局。
+            await ws.send_json(state_msg(board, game_over_override="black"))
+        elif t == "undo":
+            # 悔棋：收回「你上一手 + AI 回手」一整組（各一 ply），回到你的回合繼續下。
+            for _ in range(2):
+                if board.move_stack:
+                    board.undo_make_move()
+            # 撤到還沒輪到紅走時，補撤到紅方回合（保險）
+            while board.move_stack and not board.red_to_move:
+                board.undo_make_move()
             await ws.send_json(state_msg(board))
         elif t == "move":
             fr, to = cmd.get("from"), cmd.get("to")

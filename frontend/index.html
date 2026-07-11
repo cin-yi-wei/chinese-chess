@@ -57,7 +57,7 @@
         font-weight: bold;
         color: #ffd479;
       }
-      #new-game {
+      #controls button {
         padding: 8px 14px;
         font-size: 15px;
         border: 1px solid #a9784b;
@@ -66,7 +66,11 @@
         border-radius: 6px;
         cursor: pointer;
       }
-      #new-game:hover { background: #3a302a; }
+      #controls button:hover { background: #3a302a; }
+      #controls button:disabled {
+        opacity: .4;
+        cursor: not-allowed;
+      }
       /* RWD：棋盤等比縮放，同時受寬與高限制，直/橫都不跑版 */
       #game {
         width: min(96vw, calc((100dvh - 120px) * 604 / 668), 604px);
@@ -93,6 +97,10 @@
         <span id="difficulty-val">50</span>
       </span>
       <button id="new-game">重新開局</button>
+      <button id="undo">悔棋</button>
+      <button id="resign">認輸</button>
+      <button id="prev" title="上一步">◀ 上一步</button>
+      <button id="next" title="下一步">下一步 ▶</button>
     </div>
     <div id="game"></div>
     <script type="module" src="/src/main.js"></script>

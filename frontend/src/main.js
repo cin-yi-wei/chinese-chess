@@ -27,6 +27,9 @@ class BoardScene extends Phaser.Scene {
     this.selected = null;
     this.sprites = new Map(); // "x,y" -> 棋子容器
     this.busy = false; // 動畫/等待 AI 期間鎖住輸入
+    this.history = []; // 每個權威盤面快照 {fen,redToMove,legal,gameOver,inCheck}
+    this.viewPtr = -1; // 目前顯示的是 history 第幾筆（<最後一筆＝回顧模式）
+    this.intent = 'new_game'; // 上一個送出的請求類型，決定回覆怎麼併入 history
   }
 
   create() {
@@ -35,6 +38,14 @@ class BoardScene extends Phaser.Scene {
     this.connect();
     this.input.on('pointerdown', (p) => this.onClick(p));
     document.getElementById('new-game').onclick = () => this.newGame();
+    const undoBtn = document.getElementById('undo');
+    const resignBtn = document.getElementById('resign');
+    const prevBtn = document.getElementById('prev');
+    const nextBtn = document.getElementById('next');
+    if (undoBtn) undoBtn.onclick = () => this.doUndo();
+    if (resignBtn) resignBtn.onclick = () => this.doResign();
+    if (prevBtn) prevBtn.onclick = () => this.viewStep(-1);
+    if (nextBtn) nextBtn.onclick = () => this.viewStep(1);
 
     const diff = document.getElementById('difficulty');
     const diffVal = document.getElementById('difficulty-val');
@@ -57,7 +68,72 @@ class BoardScene extends Phaser.Scene {
           ? mode.value
           : 'medium';
     this.busy = false;
+    this.intent = 'new_game';
     this.send({ type: 'new_game', difficulty });
+  }
+
+  atLatest() {
+    return this.viewPtr === this.history.length - 1;
+  }
+
+  doUndo() {
+    // 回顧模式先跳回最新；未開局或無棋步可悔則忽略
+    if (this.busy) return;
+    if (!this.atLatest()) { this.viewPtr = this.history.length - 1; this.showSnapshot(); return; }
+    if (this.history.length <= 1) return; // 只有起始盤，沒得悔
+    const cur = this.history[this.viewPtr];
+    if (cur && cur.gameOver && cur.gameOver !== 'black') return;
+    this.intent = 'undo';
+    this.busy = true;
+    this.send({ type: 'undo' });
+  }
+
+  doResign() {
+    if (this.busy || !this.atLatest()) return;
+    const cur = this.history[this.viewPtr];
+    if (cur && cur.gameOver) return;
+    this.intent = 'resign';
+    this.send({ type: 'resign' });
+  }
+
+  // 回顧棋譜：dir=-1 上一步、+1 下一步（唯讀，不改動伺服器盤面）
+  viewStep(dir) {
+    if (this.history.length === 0) return;
+    const np = this.viewPtr + dir;
+    if (np < 0 || np >= this.history.length) return;
+    this.viewPtr = np;
+    this.showSnapshot();
+  }
+
+  // 把 history[viewPtr] 的盤面畫出來（回顧模式：不可落子）
+  showSnapshot() {
+    const s = this.history[this.viewPtr];
+    if (!s) return;
+    this.parseFen(s.fen);
+    this.redToMove = s.redToMove;
+    this.gameOver = s.gameOver;
+    this.legal = this.atLatest() ? s.legal || [] : [];
+    this.selected = null;
+    this.render();
+    if (!this.atLatest()) {
+      this.setStatus(`回顧中（第 ${this.viewPtr} / ${this.history.length - 1} 步）— 按「下一步」回到最新才能續弈`);
+    } else {
+      this.updateStatus(s);
+    }
+    this.updateNav();
+  }
+
+  updateNav() {
+    const prev = document.getElementById('prev');
+    const next = document.getElementById('next');
+    const undo = document.getElementById('undo');
+    const resign = document.getElementById('resign');
+    if (prev) prev.disabled = this.viewPtr <= 0;
+    if (next) next.disabled = this.atLatest();
+    const cur = this.history[this.viewPtr];
+    const over = !!(cur && cur.gameOver);
+    if (undo) undo.disabled = this.busy || this.history.length <= 1;
+    if (resign) resign.disabled = this.busy || over || !this.atLatest();
   }
 
   // ---- WebSocket ----
@@ -79,26 +155,54 @@ class BoardScene extends Phaser.Scene {
   onMessage(msg) {
     if (msg.type === 'illegal') {
       this.setStatus('不合規則的走法');
+      this.busy = false;
+      this.updateNav();
       return;
     }
     if (msg.type !== 'state') return;
 
-    const apply = () => {
-      this.parseFen(msg.fen);
-      this.redToMove = msg.redToMove;
-      this.gameOver = msg.gameOver;
-      this.legal = msg.legal || [];
+    const snap = {
+      fen: msg.fen,
+      redToMove: msg.redToMove,
+      legal: msg.legal || [],
+      gameOver: msg.gameOver,
+      inCheck: msg.inCheck,
+    };
+    const intent = this.intent;
+    this.intent = 'move'; // 下一則預設當作走子回覆
+
+    if (intent === 'new_game') {
+      this.history = [snap];
+      this.viewPtr = 0;
+    } else if (intent === 'undo') {
+      if (this.history.length > 1) this.history.pop(); // 丟掉被悔掉的那一組
+      this.history[this.history.length - 1] = snap;
+      this.viewPtr = this.history.length - 1;
+    } else if (intent === 'resign') {
+      this.history[this.history.length - 1] = snap; // 盤面不變，只是標記終局
+      this.viewPtr = this.history.length - 1;
+    } else {
+      this.history.push(snap); // 一般走子
+      this.viewPtr = this.history.length - 1;
+    }
+
+    const applyVisual = () => {
+      this.parseFen(snap.fen);
+      this.redToMove = snap.redToMove;
+      this.gameOver = snap.gameOver;
+      this.legal = snap.legal;
       this.selected = null;
       this.render();
       this.busy = false;
-      this.updateStatus(msg);
+      this.updateStatus(snap);
+      this.updateNav();
     };
 
-    if (msg.aiMove) {
+    if (msg.aiMove && intent === 'move') {
       // 先播 AI 那步的動畫，再同步權威盤面
-      this.animateMove(msg.aiMove[0], msg.aiMove[1], msg.aiMove[2], msg.aiMove[3], apply);
+      this.animateMove(msg.aiMove[0], msg.aiMove[1], msg.aiMove[2], msg.aiMove[3], applyVisual);
     } else {
-      apply();
+      applyVisual();
     }
   }
 
@@ -134,6 +238,7 @@ class BoardScene extends Phaser.Scene {
   // ---- 互動 ----
   onClick(pointer) {
     if (this.busy || this.gameOver || !this.redToMove) return;
+    if (!this.atLatest()) return; // 回顧模式不可落子
     const x = Math.round((pointer.x - MARGIN) / CELL);
     const y = Math.round((pointer.y - MARGIN) / CELL);
     if (x < 0 || x >= COLS || y < 0 || y >= ROWS) return;
@@ -150,7 +255,9 @@ class BoardScene extends Phaser.Scene {
         this.selected = null;
         this.markerGfx.clear();
         this.busy = true;
+        this.intent = 'move';
         this.setStatus('AI 思考中…');
+        this.updateNav();
         // 樂觀動畫：先把自己的子移過去（server 已驗證為合法目標）
         this.animateMove(from.x, from.y, x, y, null);
         this.send({ type: 'move', from: [from.x, from.y], to: [x, y] });
