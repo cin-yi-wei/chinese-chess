@@ -48,8 +48,11 @@ DEFAULT_SIMS = PRESET_SIMS["medium"]
 # 對 root 訪問數 N_i 做 π_i ∝ N_i^z 加權抽樣（先濾掉 N_i < N_max·R_th 的爛步）。
 # z 越大越強（→∞ 即選最大）、z=0 隨機、z<0 變弱；z↔Elo 近線性。與 chess-test 的
 # engine::best_move_mcts_strength 同演算法（THRESHOLD_RATIO=0.1）。
-CUSTOM_SIMS = int(os.environ.get("CHESS_CUSTOM_SIMS", "48"))  # 自訂模式的搜尋預算（≈9s/步）
-THRESHOLD_RATIO = 0.1
+# 自訂模式 sims 隨 z 縮放：弱端 sims 少（快又弱）、強端 sims 多（真的強、分佈細）。
+CUSTOM_SIMS_MIN = int(os.environ.get("CHESS_CUSTOM_SIMS_MIN", "40"))   # z=-2（最弱）
+CUSTOM_SIMS_MAX = int(os.environ.get("CHESS_CUSTOM_SIMS_MAX", "160"))  # z=+2（最強）
+# 門檻 R_th 也隨 z 縮放：強端 0.10 保品質；弱端 →0 放行爛步，下限才夠弱。
+THRESHOLD_MAX = 0.10
 CUSTOM_MIN, CUSTOM_MAX = 1, 100
 
 
@@ -59,25 +62,40 @@ def difficulty_to_z(d: int) -> float:
     return -2.0 + (d - 1.0) / 99.0 * 4.0
 
 
+def _z01(z: float) -> float:
+    """z∈[-2,2] → 0~1。"""
+    return max(0.0, min(1.0, (z + 2.0) / 4.0))
+
+
+def sims_for_z(z: float) -> int:
+    return int(round(CUSTOM_SIMS_MIN + (CUSTOM_SIMS_MAX - CUSTOM_SIMS_MIN) * _z01(z)))
+
+
+def rth_for_z(z: float) -> float:
+    return THRESHOLD_MAX * _z01(z)
+
+
 def resolve_difficulty(difficulty):
-    """回傳 (sims, z)：z=None 表示預設模式（取最高訪問）；z 有值表示自訂線性棋力。"""
+    """回傳 (sims, z)：z=None 表示預設模式（取最高訪問）；z 有值表示自訂線性棋力。
+    自訂模式 sims 依 z 縮放（弱端少、強端多）。"""
     if isinstance(difficulty, bool):  # 防呆：bool 是 int 子類
         return DEFAULT_SIMS, None
     if isinstance(difficulty, (int, float)):
-        return CUSTOM_SIMS, difficulty_to_z(int(difficulty))
+        z = difficulty_to_z(int(difficulty))
+        return sims_for_z(z), z
     if isinstance(difficulty, str) and difficulty in PRESET_SIMS:
         return PRESET_SIMS[difficulty], None
     return DEFAULT_SIMS, None
 
 
 def z_select_move(dist: dict, z: float):
-    """線性棋力選步：dist={move:N_i} → 濾門檻 → π_i ∝ N_i^z 加權抽樣。"""
+    """線性棋力選步：dist={move:N_i} → 濾門檻(隨 z) → π_i ∝ N_i^z 加權抽樣。"""
     if not dist:
         return None
     n_max = max(dist.values())
     if n_max <= 0:
         return next(iter(dist))
-    floor = n_max * THRESHOLD_RATIO
+    floor = n_max * rth_for_z(z)
     pool = [(m, n) for m, n in dist.items() if n >= floor and n > 0] or list(dist.items())
     if z >= 50.0:
         return max(pool, key=lambda mn: mn[1])[0]
