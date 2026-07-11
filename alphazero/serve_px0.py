@@ -1,178 +1,214 @@
-"""chess-az 對弈服務（px0 強權重版）：aiohttp WebSocket + 靜態前端（frontend/dist）。
+"""px0 + 自製 MCTS 的網頁對弈 GUI（自足版）。
 
-評估器用 px0（PikaXiangqiZero，lc0 象棋 fork）權重經 ONNX（px0_eval.Px0Evaluator，
-path B 純 Python 編碼 px0_encode，不需 C++ 綁定），跑在自家 PUCT MCTS（batch=8 為 px0 鐵律）。CPU 即可跑。
+- 純 Python 標準庫 HTTP 伺服器（無 aiohttp / 無 torch / 無 npm）。
+- 內嵌單檔象棋盤 HTML（點選走子）。人執紅（下方），AI 執黑，用 Px0Evaluator + puct_search_batched。
+- 伺服器維持一局 Board 狀態（含 move_stack）→ 餵給網路的 8 步歷史才正確。
 
-難度（前端 new_game 送 difficulty）：
-    預設 "easy"/"medium"/"hard" → sims 8/16/48，取最高訪問。
-    自訂整數 1~100 → 交大(NCTU 吳毅成) z-index 線性棋力系統：z∈[-2,2]、固定 sims 跑 MCTS、
-      濾掉 N<N_max·0.1 後 π∝N^z 加權抽樣（同 engine::best_move_mcts_strength）。
-      100=最強、50≈隨機最弱、1=偏好爛步。
-
-環境變數：
-    CHESS_ONNX         px0 leela2onnx 轉出的 .onnx（預設 ../px0/nets/net_fcd86ede.onnx）
-    CHESS_BATCH        批次葉評估大小（預設 8，px0 鐵律，勿改大）
-    CHESS_CUSTOM_SIMS  自訂模式的固定搜尋預算（預設 48，≈9s/步）
-    CHESS_STATIC       前端靜態目錄（預設 ../frontend/dist）
-    CHESS_PORT         監聽埠（預設 3941）
+用法（alphazero/ 下，需 onnxruntime + 已轉好的 .onnx）：
+    PX0_ONNX=../px0/nets/net_33mb.onnx python serve_px0.py
+    然後瀏覽器開 http://127.0.0.1:3941
+環境變數：PX0_ONNX（權重 .onnx）、CHESS_SIMS（預設400）、CHESS_BATCH（預設8）、CHESS_PORT（預設3941）
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
-import random
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-_REPO_ALPHAZERO = os.path.dirname(os.path.abspath(__file__))
-
-from aiohttp import web
-
+from xiangqi.board import (Board, coord_to_sq, sq_to_coord,
+                           move_src, move_dst, make_move_code)
+from mcts import puct_search_batched
 from px0_eval import Px0Evaluator
-from mcts import puct_search_batched, visit_distribution_batched
-from xiangqi.board import Board, coord_to_sq, sq_to_coord, move_src, move_dst, make_move_code
 
-ONNX = os.environ.get(
-    "CHESS_ONNX",
-    os.path.normpath(os.path.join(_REPO_ALPHAZERO, "..", "px0", "nets", "net_fcd86ede.onnx")),
-)
+ONNX = os.environ.get("PX0_ONNX", r"../px0/nets/net_33mb.onnx")
+SIMS = int(os.environ.get("CHESS_SIMS", "400"))
 BATCH = int(os.environ.get("CHESS_BATCH", "8"))
-STATIC = os.environ.get("CHESS_STATIC", "../frontend/dist")
 PORT = int(os.environ.get("CHESS_PORT", "3941"))
 
-# 預設難度 → sims（取訪問數最高步）
-PRESET_SIMS = {"easy": 8, "medium": 16, "hard": 48}
-DEFAULT_SIMS = PRESET_SIMS["medium"]
-
-# 自訂＝交大（NCTU 吳毅成）線性棋力系統：固定 sims 跑 MCTS，再用 strength index z
-# 對 root 訪問數 N_i 做 π_i ∝ N_i^z 加權抽樣（先濾掉 N_i < N_max·R_th 的爛步）。
-# z 越大越強（→∞ 即選最大）、z=0 隨機、z<0 變弱；z↔Elo 近線性。與 chess-test 的
-# engine::best_move_mcts_strength 同演算法（THRESHOLD_RATIO=0.1）。
-CUSTOM_SIMS = int(os.environ.get("CHESS_CUSTOM_SIMS", "48"))  # 自訂模式的搜尋預算（≈9s/步）
-THRESHOLD_RATIO = 0.1
-CUSTOM_MIN, CUSTOM_MAX = 1, 100
-
-
-def difficulty_to_z(d: int) -> float:
-    """自訂 1~100 線性映射到 strength index z ∈ [-2, 2]（論文實測此段 z↔Elo 近線性）。"""
-    d = max(CUSTOM_MIN, min(CUSTOM_MAX, int(d)))
-    return -2.0 + (d - 1.0) / 99.0 * 4.0
-
-
-def resolve_difficulty(difficulty):
-    """回傳 (sims, z)：z=None 表示預設模式（取最高訪問）；z 有值表示自訂線性棋力。"""
-    if isinstance(difficulty, bool):  # 防呆：bool 是 int 子類
-        return DEFAULT_SIMS, None
-    if isinstance(difficulty, (int, float)):
-        return CUSTOM_SIMS, difficulty_to_z(int(difficulty))
-    if isinstance(difficulty, str) and difficulty in PRESET_SIMS:
-        return PRESET_SIMS[difficulty], None
-    return DEFAULT_SIMS, None
-
-
-def z_select_move(dist: dict, z: float):
-    """線性棋力選步：dist={move:N_i} → 濾門檻 → π_i ∝ N_i^z 加權抽樣。"""
-    if not dist:
-        return None
-    n_max = max(dist.values())
-    if n_max <= 0:
-        return next(iter(dist))
-    floor = n_max * THRESHOLD_RATIO
-    pool = [(m, n) for m, n in dist.items() if n >= floor and n > 0] or list(dist.items())
-    if z >= 50.0:
-        return max(pool, key=lambda mn: mn[1])[0]
-    weights = [n ** z for _, n in pool]
-    total = sum(weights)
-    if not (total > 0.0):
-        return max(pool, key=lambda mn: mn[1])[0]
-    pick = random.random() * total
-    for (m, _), w in zip(pool, weights):
-        pick -= w
-        if pick <= 0.0:
-            return m
-    return pool[-1][0]
-
-
 _evaluator = Px0Evaluator(ONNX)
+_board = Board.start()
+_lock = threading.Lock()   # 單局、序列化存取
 
 
-def _pick_move(board: Board, sims: int, z):
-    """跑 MCTS 選一步。z=None → 取最高訪問（預設難度）；z 有值 → 線性棋力抽樣（自訂）。"""
-    if z is None:
-        return puct_search_batched(board, _evaluator, sims, BATCH, 1.5)
-    dist = visit_distribution_batched(board, _evaluator, sims, BATCH, 1.5)
-    return z_select_move(dist, z)
-
-
-def state_msg(board: Board, ai_move=None) -> dict:
-    legal = board.legal_moves()
-    game_over = None
+def _state(ai_move=None):
+    legal = _board.legal_moves()
+    over = None
     if not legal:
-        game_over = "black" if board.red_to_move else "red"
+        over = "black" if _board.red_to_move else "red"
     return {
-        "type": "state",
-        "fen": board.to_fen(),
-        "redToMove": board.red_to_move,
-        "inCheck": board.checked(),
+        "fen": _board.to_fen(),
+        "redToMove": _board.red_to_move,
+        "inCheck": _board.checked(),
         "legal": [[*sq_to_coord(move_src(m)), *sq_to_coord(move_dst(m))] for m in legal],
         "aiMove": ai_move,
-        "gameOver": game_over,
+        "gameOver": over,
     }
 
 
-async def ws_handler(request: web.Request) -> web.WebSocketResponse:
-    ws = web.WebSocketResponse()
-    await ws.prepare(request)
-    board = Board.start()
-    sims, z = DEFAULT_SIMS, None  # 每條連線各自記住難度（z=None 取最高訪問；有值走線性棋力）
-    async for msg in ws:
-        if msg.type != web.WSMsgType.TEXT:
-            continue
-        try:
-            cmd = json.loads(msg.data)
-        except json.JSONDecodeError:
-            continue
-        t = cmd.get("type")
-        if t == "new_game":
-            board = Board.start()
-            sims, z = resolve_difficulty(cmd.get("difficulty"))
-            await ws.send_json(state_msg(board))
-        elif t == "move":
-            fr, to = cmd.get("from"), cmd.get("to")
-            mv = make_move_code(coord_to_sq(fr[0], fr[1]), coord_to_sq(to[0], to[1]))
-            if mv not in board.legal_moves():
-                await ws.send_json({"type": "illegal"})
-                continue
-            board.make_move(mv)
-            if not board.legal_moves():
-                await ws.send_json(state_msg(board))
-                continue
-            # AI 推論放到執行緒，避免卡住事件迴圈。預設模式取最高訪問；自訂走線性棋力 z 抽樣。
-            ai_mv = await asyncio.to_thread(_pick_move, board, sims, z)
-            board.make_move(ai_mv)
-            ax, ay = sq_to_coord(move_src(ai_mv))
-            bx, by = sq_to_coord(move_dst(ai_mv))
-            await ws.send_json(state_msg(board, [ax, ay, bx, by]))
-    return ws
+def _handle(cmd: dict) -> dict:
+    global _board
+    t = cmd.get("type")
+    if t == "new_game":
+        _board = Board.start()
+        return _state()
+    if t == "move":
+        fr, to = cmd["from"], cmd["to"]
+        mv = make_move_code(coord_to_sq(fr[0], fr[1]), coord_to_sq(to[0], to[1]))
+        if mv not in _board.legal_moves():
+            return {"illegal": True}
+        _board.make_move(mv)                      # 人（紅）走
+        if not _board.legal_moves():              # 人走完 AI 已無著（人勝）
+            return _state()
+        ai_mv = puct_search_batched(_board, _evaluator, SIMS, BATCH)
+        _board.make_move(ai_mv)                   # AI（黑）回手
+        ax, ay = sq_to_coord(move_src(ai_mv))
+        bx, by = sq_to_coord(move_dst(ai_mv))
+        return _state([ax, ay, bx, by])
+    return {"error": "unknown"}
 
 
-async def index(_request: web.Request) -> web.FileResponse:
-    return web.FileResponse(os.path.join(STATIC, "index.html"))
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        if self.path == "/health":
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
+        if self.path in ("/", "/index.html"):
+            body = INDEX_HTML.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            self.send_error(404)
+
+    def do_POST(self):
+        if self.path != "/api":
+            self.send_error(404)
+            return
+        n = int(self.headers.get("Content-Length", 0))
+        cmd = json.loads(self.rfile.read(n) or b"{}")
+        with _lock:
+            resp = _handle(cmd)
+        body = json.dumps(resp).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
 
-def make_app() -> web.Application:
-    app = web.Application()
-    app.router.add_get("/ws", ws_handler)
-    app.router.add_get("/health", lambda _r: web.Response(text="ok"))
-    app.router.add_get("/", index)
-    app.router.add_static("/", STATIC, show_index=False)
-    return app
+INDEX_HTML = r"""<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>px0 象棋 · 你執紅</title>
+<style>
+  body{margin:0;background:#2b2b2b;color:#eee;font-family:system-ui,"Microsoft JhengHei",sans-serif;
+       display:flex;flex-direction:column;align-items:center;gap:12px;padding:16px}
+  h1{font-size:18px;margin:4px;font-weight:600}
+  #status{font-size:14px;min-height:20px;color:#bbb}
+  #wrap{position:relative}
+  svg{background:#e9c88a;border-radius:6px;box-shadow:0 4px 18px rgba(0,0,0,.4);touch-action:manipulation}
+  .pc{cursor:pointer}
+  .pc text{font-weight:700;pointer-events:none}
+  button{background:#3a6ea5;color:#fff;border:0;border-radius:6px;padding:8px 16px;font-size:14px;cursor:pointer}
+  button:hover{background:#4d84c0}
+  .muted{color:#888;font-size:12px}
+</style></head><body>
+<h1>px0 象棋 · <span style="color:#e05a4a">你執紅（下方）</span> vs AI 黑</h1>
+<div id="status">載入中…</div>
+<div id="wrap"><svg id="board" width="450" height="500" viewBox="0 0 450 500"></svg></div>
+<div><button onclick="newGame()">新局</button> <span class="muted">點自己的子→點目標格</span></div>
+<script>
+const M=25, GX=50, GY=50;            // 邊距/格距
+const X=i=>GX+i*M, Y=j=>GY+j*M;      // 檔 i(0..8) 列 j(0..9) → 像素
+const CN={R:"俥",N:"傌",B:"相",A:"仕",K:"帥",C:"炮",P:"兵",
+          r:"車",n:"馬",b:"象",a:"士",k:"將",c:"砲",p:"卒"};
+let state=null, sel=null, aiMove=null;
+
+function parseFEN(fen){
+  const g=[]; const rows=fen.split(" ")[0].split("/");
+  for(let j=0;j<10;j++){ const row=rows[j]||""; const line=[];
+    for(const ch of row){ if(ch>="1"&&ch<="9"){for(let k=0;k<+ch;k++)line.push(null);} else line.push(ch);}
+    while(line.length<9)line.push(null); g.push(line);}
+  return g;
+}
+function draw(){
+  const svg=document.getElementById("board"); let s="";
+  // 橫線
+  for(let j=0;j<10;j++) s+=`<line x1="${X(0)}" y1="${Y(j)}" x2="${X(8)}" y2="${Y(j)}" stroke="#7a5a28"/>`;
+  // 直線（中間河界斷開）
+  for(let i=0;i<9;i++){
+    if(i===0||i===8){ s+=`<line x1="${X(i)}" y1="${Y(0)}" x2="${X(i)}" y2="${Y(9)}" stroke="#7a5a28"/>`;}
+    else{ s+=`<line x1="${X(i)}" y1="${Y(0)}" x2="${X(i)}" y2="${Y(4)}" stroke="#7a5a28"/>`;
+          s+=`<line x1="${X(i)}" y1="${Y(5)}" x2="${X(i)}" y2="${Y(9)}" stroke="#7a5a28"/>`;}
+  }
+  // 九宮斜線
+  s+=`<line x1="${X(3)}" y1="${Y(0)}" x2="${X(5)}" y2="${Y(2)}" stroke="#7a5a28"/><line x1="${X(5)}" y1="${Y(0)}" x2="${X(3)}" y2="${Y(2)}" stroke="#7a5a28"/>`;
+  s+=`<line x1="${X(3)}" y1="${Y(7)}" x2="${X(5)}" y2="${Y(9)}" stroke="#7a5a28"/><line x1="${X(5)}" y1="${Y(7)}" x2="${X(3)}" y2="${Y(9)}" stroke="#7a5a28"/>`;
+  s+=`<text x="${X(2)}" y="${Y(4.6)}" fill="#7a5a28" font-size="16">楚河</text><text x="${X(5)}" y="${Y(4.6)}" fill="#7a5a28" font-size="16">漢界</text>`;
+  // AI 上一步高亮
+  if(aiMove){ const[fx,fy,tx,ty]=aiMove;
+    s+=`<circle cx="${X(fx)}" cy="${Y(fy)}" r="14" fill="none" stroke="#4d84c0" stroke-width="2"/>`;
+    s+=`<circle cx="${X(tx)}" cy="${Y(ty)}" r="14" fill="none" stroke="#4d84c0" stroke-width="2"/>`;}
+  // 選取高亮 + 合法目標
+  if(sel){ s+=`<circle cx="${X(sel[0])}" cy="${Y(sel[1])}" r="15" fill="none" stroke="#e0c000" stroke-width="3"/>`;
+    for(const [fx,fy,tx,ty] of state.legal){ if(fx===sel[0]&&fy===sel[1])
+      s+=`<circle cx="${X(tx)}" cy="${Y(ty)}" r="5" fill="#2a8f3a"/>`;}}
+  // 棋子
+  const g=parseFEN(state.fen);
+  for(let j=0;j<10;j++)for(let i=0;i<9;i++){ const p=g[j][i]; if(!p)continue;
+    const red=p===p.toUpperCase(); const fill=red?"#c0392b":"#111";
+    s+=`<g class="pc" data-x="${i}" data-y="${j}">
+      <circle cx="${X(i)}" cy="${Y(j)}" r="13" fill="#f3e2b8" stroke="${fill}" stroke-width="1.5"/>
+      <text x="${X(i)}" y="${Y(j)+6}" text-anchor="middle" font-size="17" fill="${fill}">${CN[p]}</text></g>`;
+  }
+  svg.innerHTML=s;
+  svg.querySelectorAll(".pc").forEach(e=>e.onclick=()=>click(+e.dataset.x,+e.dataset.y));
+  svg.onclick=(ev)=>{ if(ev.target===svg||ev.target.tagName==="line") boardClick(ev); };
+}
+function nearest(ev){ const r=document.getElementById("board").getBoundingClientRect();
+  const px=(ev.clientX-r.left)*450/r.width, py=(ev.clientY-r.top)*500/r.height;
+  const i=Math.round((px-GX)/M), j=Math.round((py-GY)/M);
+  return (i>=0&&i<9&&j>=0&&j<10)?[i,j]:null; }
+function boardClick(ev){ const c=nearest(ev); if(c)click(c[0],c[1]); }
+function click(i,j){
+  if(!state||state.gameOver||!state.redToMove)return;
+  if(sel){ const ok=state.legal.some(m=>m[0]===sel[0]&&m[1]===sel[1]&&m[2]===i&&m[3]===j);
+    if(ok){ const from=sel; sel=null; move(from,[i,j]); return;} }
+  // 選自己的子（紅=大寫）
+  const g=parseFEN(state.fen); const p=g[j][i];
+  if(p&&p===p.toUpperCase()){ sel=[i,j]; draw(); } else { sel=null; draw(); }
+}
+function setStatus(){ const s=document.getElementById("status");
+  if(!state){s.textContent="";return;}
+  if(state.gameOver){ s.textContent = state.gameOver==="red"?"🎉 你贏了！":(state.gameOver==="black"?"AI 贏了":"和局"); return;}
+  s.textContent = state.redToMove ? (state.inCheck?"你被將軍！輪你走":"輪你走（紅）") : "AI 思考中…";
+}
+async function api(cmd){ const r=await fetch("/api",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(cmd)}); return r.json(); }
+async function newGame(){ sel=null; aiMove=null; state=await api({type:"new_game"}); draw(); setStatus(); }
+async function move(from,to){ sel=null; setStatus();
+  const r=await api({type:"move",from,to});
+  if(r.illegal){ return; }
+  state=r; aiMove=r.aiMove; draw(); setStatus();
+}
+newGame();
+</script>
+</body></html>"""
 
 
-def main() -> None:
-    print(f"chess-az(px0) 啟動 127.0.0.1:{PORT}  onnx={ONNX} batch={BATCH} "
-          f"presets={PRESET_SIMS} providers={_evaluator.session.get_providers()}")
-    web.run_app(make_app(), host="127.0.0.1", port=PORT)
+def main():
+    print(f"px0 象棋 GUI 啟動 → http://127.0.0.1:{PORT}")
+    print(f"  net={ONNX}  sims={SIMS}  batch={BATCH}")
+    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
 
 
 if __name__ == "__main__":
