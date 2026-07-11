@@ -371,26 +371,46 @@ class BoardScene extends Phaser.Scene {
     this.drawMarkers();
   }
 
-  // 標出最近著法：你的一步（綠框）+ AI 的一步（藍框），from 虛淡、to 實亮。
+  // 標出最近著法：起點小點、終點四角括號。你＝綠、AI＝藍。低調不擋棋子。
   drawLastMove() {
     const g = this.lastMoveGfx;
     if (!g) return;
     g.clear();
     if (!this.atLatest()) return; // 回顧模式不畫（避免與歷史盤面混淆）
-    const box = (x, y, color, alpha) => {
-      const s = R + 6;
-      g.lineStyle(3, color, alpha);
-      g.strokeRoundedRect(px(x) - s, py(y) - s, s * 2, s * 2, 6);
+
+    // 起點：中心一個半透明小圓點
+    const dot = (x, y, color) => {
+      g.fillStyle(color, 0.35);
+      g.fillCircle(px(x), py(y), 7);
     };
+    // 終點：四個角落的 L 形括號（包住格子，不畫整圈框）
+    const corners = (x, y, color) => {
+      const s = R + 5; // 括號離中心的半徑
+      const len = 9; // L 每邊長度
+      const cx = px(x), cy = py(y);
+      g.lineStyle(3, color, 0.95);
+      const L = (ox, oy, dx, dy) => {
+        g.beginPath();
+        g.moveTo(cx + ox, cy + oy + dy * len);
+        g.lineTo(cx + ox, cy + oy);
+        g.lineTo(cx + ox + dx * len, cy + oy);
+        g.strokePath();
+      };
+      L(-s, -s, 1, 1);   // 左上
+      L(s, -s, -1, 1);   // 右上
+      L(-s, s, 1, -1);   // 左下
+      L(s, s, -1, -1);   // 右下
+    };
+
     if (this.lastHuman) {
       const [a, b, c, d] = this.lastHuman;
-      box(a, b, 0x2fbf4f, 0.5);
-      box(c, d, 0x2fbf4f, 1);
+      dot(a, b, 0x2fbf4f);
+      corners(c, d, 0x2fbf4f);
     }
     if (this.lastAi) {
       const [a, b, c, d] = this.lastAi;
-      box(a, b, 0x4d84c0, 0.5);
-      box(c, d, 0x4d84c0, 1);
+      dot(a, b, 0x4d84c0);
+      corners(c, d, 0x4d84c0);
     }
   }
 
