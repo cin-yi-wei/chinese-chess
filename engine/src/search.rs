@@ -40,6 +40,7 @@ struct SearchState {
     tt: std::collections::HashMap<u64, TtEntry>,
     killers: [[Move; 2]; MAX_PLY],       // 每個 ply 兩個 killer（造成截斷的靜著）
     history: Vec<i32>,                    // [src*256 + dst] 靜著截斷累計，改善排序
+    heuristics: bool,                    // 開啟 PVS + LMR（啟發式裁剪；測試用精確版時關閉）
 }
 
 impl SearchState {
@@ -48,6 +49,7 @@ impl SearchState {
             tt: std::collections::HashMap::new(),
             killers: [[0; 2]; MAX_PLY],
             history: vec![0; 256 * 256],
+            heuristics: true,
         }
     }
 
@@ -207,14 +209,37 @@ fn alpha_beta(board: &mut Board, alpha_in: i16, beta: i16, depth: u8, ply: usize
     let mut best_mv: Move = 0;
 
     let killers = if ply < MAX_PLY { st.killers[ply] } else { [0, 0] };
+    let in_check = board.checked();
     let mut moves = board.generate_moves();
     order_moves(board, &mut moves, tt_best, killers, &st.history);
+    let child_depth = depth - 1;
+    let mut idx = 0usize;
+    let mut first = true;
     for mv in moves {
+        let quiet = board.squares[dst(mv) as usize] == 0;
         if !board.make_move(mv) {
             continue;
         }
         any_legal = true;
-        let vl = -alpha_beta(board, -beta, -alpha, depth - 1, ply + 1, st);
+        let vl;
+        if first || !st.heuristics {
+            // 第一手（主變例）或關閉啟發式：全窗全深度搜尋
+            vl = -alpha_beta(board, -beta, -alpha, child_depth, ply + 1, st);
+        } else {
+            // LMR：靠後的靜著（非將軍、深度足夠）先減深度試
+            let mut red = 0u8;
+            if quiet && !in_check && depth >= 3 && idx >= 3 {
+                red = if idx >= 6 && depth >= 5 { 2 } else { 1 };
+            }
+            let rdepth = child_depth.saturating_sub(red);
+            // PVS 零窗探測（可能是減深度）
+            let mut v = -alpha_beta(board, -alpha - 1, -alpha, rdepth, ply + 1, st);
+            // 探測落在窗內(或有減深度且高過 alpha) → 全窗全深度重搜
+            if v > alpha && (red > 0 || v < beta) {
+                v = -alpha_beta(board, -beta, -alpha, child_depth, ply + 1, st);
+            }
+            vl = v;
+        }
         board.undo_make_move();
 
         if vl > best_val {
@@ -229,6 +254,8 @@ fn alpha_beta(board: &mut Board, alpha_in: i16, beta: i16, depth: u8, ply: usize
         if vl > alpha {
             alpha = vl;
         }
+        first = false;
+        idx += 1;
     }
 
     if !any_legal {
@@ -272,9 +299,10 @@ mod tests {
         alpha
     }
 
-    /// TT+排序版根節點值（供比對）。
+    /// TT+排序+quiescence 精確版根節點值（關閉 PVS/LMR 啟發式，供與純 negamax 比對）。
     fn tt_root(board: &mut Board, depth: u8) -> i16 {
         let mut st = SearchState::new();
+        st.heuristics = false;
         alpha_beta(board, -MATE_VALUE, MATE_VALUE, depth, 0, &mut st)
     }
 
